@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Chat with Sajiv Francis — a personal RAG-powered assistant grounded in his architecture writing, talks, and published work." />
+    <meta name="robots" content="noindex" />
+    <title>Chat — Sajiv Francis</title>
+
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+
+    <link rel="preconnect" href="https://rsms.me/" />
+    <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+
+    <link rel="stylesheet" href="/styles.css" />
+
+    <script>
+      // Set theme before paint to avoid flash
+      const stored = localStorage.getItem('theme');
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      document.documentElement.dataset.theme = stored ?? (prefersDark ? 'dark' : 'light');
+    </script>
+  </head>
+  <body>
+    <header class="app-header">
+      <a href="https://sajivfrancis.com" class="brand" aria-label="Sajiv Francis — home">
+        <img src="/img/logo.png" alt="Sajiv Francis" width="36" height="36" />
+        <span class="brand-text">Chat</span>
+      </a>
+      <button type="button" id="theme-toggle" aria-label="Toggle theme" class="icon-button">
+        <span class="theme-icon-light" aria-hidden="true">☾</span>
+        <span class="theme-icon-dark" aria-hidden="true">☀</span>
+      </button>
+    </header>
+
+    <main class="conversation" id="conversation" aria-live="polite">
+      <div class="welcome">
+        <h1>Ask me anything about my work.</h1>
+        <p>
+          This chat is grounded in my published writing, architecture notes, and talks.
+          Try: <em>"What did Sajiv get wrong about Optey?"</em> or
+          <em>"What's Gravitite?"</em>
+        </p>
+      </div>
+    </main>
+
+    <form class="composer" id="composer" autocomplete="off">
+      <textarea
+        id="input"
+        rows="1"
+        placeholder="Ask something…"
+        aria-label="Your question"
+        required
+      ></textarea>
+      <button type="submit" id="send" aria-label="Send">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <line x1="22" y1="2" x2="11" y2="13"></line>
+          <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+        </svg>
+      </button>
+    </form>
+
+    <p class="footnote">
+      Answers are generated and may be wrong. Source of truth:
+      <a href="https://sajivfrancis.com">sajivfrancis.com</a>.
+    </p>
+
+    <script src="/chat.js" type="module"></script>
+  </body>
+</html>

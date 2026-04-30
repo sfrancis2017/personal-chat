@@ -1,0 +1,13 @@
+name = "chat-worker"
+main = "src/index.ts"
+compatibility_date = "2026-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+# CORS allowed origins. Add localhost for dev; production is the Pages domain.
+[vars]
+ALLOWED_ORIGINS = "https://chat.sajivfrancis.com,http://localhost:8000,http://127.0.0.1:8000"
+ANTHROPIC_MODEL = "claude-sonnet-4-6"
+
+# Secrets — set via:
+#   cd worker && npx wrangler secret put ANTHROPIC_API_KEY
+#   cd worker && npx wrangler secret put OPENAI_API_KEY  (Saturday)
