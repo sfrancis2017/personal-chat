@@ -1,3 +1,10 @@
 # Local dev secrets. Copy to .dev.vars (gitignored) and fill in.
 # `wrangler secret put` is for DEPLOYED workers; .dev.vars is for `wrangler dev`.
+
 ANTHROPIC_API_KEY=sk-ant-...
+
+# Shared bearer token for chat access. Generate one with:
+#   node -e "console.log(crypto.randomBytes(32).toString('hex'))"
+# Set the same value in BOTH .dev.vars (local) and via `wrangler secret put CHAT_TOKEN` (prod).
+# On first visit to the chat UI, you'll be prompted to paste this token; it's stored in localStorage.
+CHAT_TOKEN=replace-with-long-random-hex-string

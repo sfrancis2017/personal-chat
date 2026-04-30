@@ -6,6 +6,26 @@ const API_URL =
     ? 'http://localhost:8787/chat'
     : 'https://chat-worker.sfrancis2017.workers.dev/chat');
 
+const TOKEN_KEY = 'chat-access-token';
+
+function getToken() {
+  let t = localStorage.getItem(TOKEN_KEY);
+  if (!t) {
+    t = window.prompt(
+      'Enter your access token to use this chat.\n(Set as CHAT_TOKEN in the Worker; saved to this device only.)'
+    );
+    if (t) {
+      t = t.trim();
+      localStorage.setItem(TOKEN_KEY, t);
+    }
+  }
+  return t;
+}
+
+function clearToken() {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
 const conversation = document.getElementById('conversation');
 const composer = document.getElementById('composer');
 const input = document.getElementById('input');
@@ -77,12 +97,22 @@ composer.addEventListener('submit', async (e) => {
   let assistantText = '';
 
   try {
+    const token = getToken();
+    if (!token) throw new Error('Access token required.');
+
     const res = await fetch(API_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
       body: JSON.stringify({ messages: history }),
     });
 
+    if (res.status === 401) {
+      clearToken();
+      throw new Error('Access token rejected. Refresh and try again.');
+    }
     if (!res.body) {
       throw new Error(`HTTP ${res.status} (no body)`);
     }

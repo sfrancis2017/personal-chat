@@ -9,9 +9,27 @@ interface Env {
   ANTHROPIC_API_KEY: string;
   ANTHROPIC_MODEL: string;
   ALLOWED_ORIGINS: string;
+  CHAT_TOKEN: string; // shared bearer token; clients send Authorization: Bearer <token>
   // Saturday additions:
   // OPENAI_API_KEY: string;
   // DATABASE_URL: string;
+}
+
+// Constant-time string comparison to avoid timing attacks on token check
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < a.length; i++) {
+    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return mismatch === 0;
+}
+
+function isAuthorized(req: Request, env: Env): boolean {
+  const auth = req.headers.get('Authorization') ?? '';
+  const match = auth.match(/^Bearer\s+(.+)$/);
+  if (!match) return false;
+  return timingSafeEqual(match[1], env.CHAT_TOKEN);
 }
 
 interface ChatMessage {
@@ -188,6 +206,16 @@ export default {
     }
 
     if (url.pathname === '/chat' && req.method === 'POST') {
+      if (!isAuthorized(req, env)) {
+        return new Response(
+          `data: ${JSON.stringify({ error: 'Unauthorized: invalid or missing access token.' })}\n\n`,
+          {
+            status: 401,
+            headers: { 'Content-Type': 'text/event-stream', ...cors },
+          }
+        );
+      }
+
       let body: ChatRequest;
       try {
         body = await req.json();
