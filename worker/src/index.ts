@@ -62,10 +62,6 @@ const MOCK_CHUNKS = [
     text: "In 2018, Sajiv built Optey — a document-ingestion pipeline with NLP parsing, restructured output, and an adaptive-learning UI. In 2026 terms it was a RAG-based adaptive-learning SaaS, before RAG had a name. The architectural pattern (ingest → structure → personalize) and the cognitive-science framing (the Interactive Learning Model — ILM) hold up. What he missed: the scale of foundation models, embedding-based retrieval, and the fact that the AI layer itself would commoditize while the workflow and UX layer would matter most. His one-line thesis: capable models force complex architectures because they make ambitious products possible.",
   },
   {
-    source: 'Gravitite',
-    text: 'Gravitite is an AI-native Enterprise Architecture platform Sajiv is building separately from his day job. Distinct from his Fortune 50 role and the personal portfolio site.',
-  },
-  {
     source: '5-post publishing sequence',
     text: 'Sajiv is executing a 5-post blog sequence over 2026 as part of a 90-day O-1 evidence sprint: (1) the Optey origin story / NLP-before-RAG (published 2026-04-27); (2) BPMN-2018 → AI-2026 bridge; (3) why architects don\'t use the tools built for them; (4) universal IR for multi-notation diagrams; (5) agentic AI for enterprise architecture practice. Tier-1 venue targets: The Open Group, Journal of Enterprise Architecture, IEEE Software, IEEE IT Professional.',
   },
