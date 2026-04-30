@@ -1,0 +1,3 @@
+# Local dev secrets. Copy to .dev.vars (gitignored) and fill in.
+# `wrangler secret put` is for DEPLOYED workers; .dev.vars is for `wrangler dev`.
+ANTHROPIC_API_KEY=sk-ant-...

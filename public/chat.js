@@ -83,8 +83,22 @@ composer.addEventListener('submit', async (e) => {
       body: JSON.stringify({ messages: history }),
     });
 
-    if (!res.ok || !res.body) {
-      throw new Error(`HTTP ${res.status}`);
+    if (!res.body) {
+      throw new Error(`HTTP ${res.status} (no body)`);
+    }
+    if (!res.ok) {
+      // Worker errors come back as SSE; read the first event for the real message.
+      const text = await res.text();
+      const match = text.match(/data: (\{[^\n]+\})/);
+      if (match) {
+        try {
+          const json = JSON.parse(match[1]);
+          throw new Error(json.error ?? `HTTP ${res.status}`);
+        } catch (e) {
+          if (e.message?.startsWith('HTTP') || e.message?.startsWith('Upstream')) throw e;
+        }
+      }
+      throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
     }
 
     const reader = res.body.getReader();
