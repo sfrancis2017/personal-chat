@@ -1,12 +1,11 @@
 /**
  * Personal RAG chat — Cloudflare Worker.
  *
- * Embeds the user's query via OpenAI text-embedding-3-small, retrieves
- * top-K chunks from pgvector on the DO droplet, then streams a grounded
- * Claude response.
+ * Embeds the user's query via OpenAI, sends the embedding to a small
+ * HTTP retrieval API on the DO droplet, then streams a grounded Claude
+ * response. The droplet's API does the actual pgvector query — keeping
+ * the Worker's subrequest count at 3 (embed + retrieve + Anthropic).
  */
-
-import postgres from 'postgres';
 
 interface Env {
   ANTHROPIC_API_KEY: string;
@@ -14,7 +13,8 @@ interface Env {
   ALLOWED_ORIGINS: string;
   CHAT_TOKEN: string;
   OPENAI_API_KEY: string;
-  DATABASE_URL: string;
+  RETRIEVE_URL: string;
+  RETRIEVE_TOKEN: string;
 }
 
 // Constant-time string comparison to avoid timing attacks on token check
@@ -97,50 +97,34 @@ async function getContext(query: string, env: Env): Promise<Chunk[]> {
   const embedding = await embedQuery(query, env);
   if (!embedding) return MOCK_CHUNKS;
 
-  const sql = postgres(env.DATABASE_URL, {
-    ssl: 'require',
-    max: 1,
-    idle_timeout: 5,
-    connect_timeout: 10,
-    // Cloudflare Workers free plan: 50 subrequests/invocation. Skip the
-    // setup chatter that postgres.js does by default (server version,
-    // type fetch, prepared statements) so we stay well under.
-    fetch_types: false,
-    prepare: false,
-  });
-
   try {
-    const vec = '[' + embedding.join(',') + ']';
-    const rows = await sql<
-      Array<{
-        source_url: string | null;
-        source_path: string | null;
-        text: string;
-        topic: string | null;
-        metadata: any;
-      }>
-    >`
-      SELECT source_url, source_path, text, topic, metadata
-      FROM chunks
-      ORDER BY embedding <=> ${vec}::vector
-      LIMIT 6
-    `;
-    if (!rows.length) return MOCK_CHUNKS;
+    const r = await fetch(env.RETRIEVE_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${env.RETRIEVE_TOKEN}`,
+      },
+      body: JSON.stringify({ embedding }),
+    });
+    if (!r.ok) {
+      console.error('retrieve API error', r.status, await r.text());
+      return MOCK_CHUNKS;
+    }
+    const j: any = await r.json();
+    if (!j.chunks?.length) return MOCK_CHUNKS;
 
-    return rows.map((r) => {
+    return j.chunks.map((c: any) => {
       const title =
-        (r.metadata && typeof r.metadata === 'object' && (r.metadata as any).title) ||
-        r.source_path ||
-        r.source_url ||
+        (c.metadata && typeof c.metadata === 'object' && c.metadata.title) ||
+        c.source_path ||
+        c.source_url ||
         'doc';
-      const topicSuffix = r.topic ? ` — ${r.topic}` : '';
-      return { source: `${title}${topicSuffix}`, text: r.text };
+      const topicSuffix = c.topic ? ` — ${c.topic}` : '';
+      return { source: `${title}${topicSuffix}`, text: c.text };
     });
   } catch (e) {
-    console.error('pgvector query failed', e);
+    console.error('retrieve fetch failed', e);
     return MOCK_CHUNKS;
-  } finally {
-    await sql.end({ timeout: 5 });
   }
 }
 
