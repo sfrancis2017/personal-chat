@@ -1,18 +1,20 @@
 /**
  * Personal RAG chat — Cloudflare Worker.
  *
- * Tonight: mock context (hardcoded chunks) → Claude with streaming.
- * Saturday: replace getContext() with pgvector query against DO Postgres.
+ * Embeds the user's query via OpenAI text-embedding-3-small, retrieves
+ * top-K chunks from pgvector on the DO droplet, then streams a grounded
+ * Claude response.
  */
+
+import postgres from 'postgres';
 
 interface Env {
   ANTHROPIC_API_KEY: string;
   ANTHROPIC_MODEL: string;
   ALLOWED_ORIGINS: string;
-  CHAT_TOKEN: string; // shared bearer token; clients send Authorization: Bearer <token>
-  // Saturday additions:
-  // OPENAI_API_KEY: string;
-  // DATABASE_URL: string;
+  CHAT_TOKEN: string;
+  OPENAI_API_KEY: string;
+  DATABASE_URL: string;
 }
 
 // Constant-time string comparison to avoid timing attacks on token check
@@ -50,30 +52,91 @@ Rules:
 4. If a question is off-topic from his work (general trivia, current events, code help), redirect: "This chat is grounded in Sajiv's writing — try sajivfrancis.com or docs.sajivfrancis.com for that."
 5. Voice: direct, lightly editorial. Match Stratechery / Dan Luu register. No hedging, no "I'd be happy to help."`;
 
-// ---- Mock context retrieval (Saturday: replace with pgvector query) -------
+// ---- Context retrieval: OpenAI embedding → pgvector top-K ----------------
 
-const MOCK_CHUNKS = [
+interface Chunk {
+  source: string;
+  text: string;
+}
+
+// Mock chunks used as a graceful fallback if embedding or pgvector fails,
+// so the chat still answers something rather than 500-ing.
+const MOCK_CHUNKS: Chunk[] = [
   {
     source: 'About Sajiv',
     text: 'Sajiv Francis is an Enterprise Architect at a Fortune 50 technology company, leading AI programmes at the intersection of enterprise systems, cloud architecture, and large language models. TOGAF 10 certified. Background in NLP, document intelligence, and SAP ecosystems. Canadian citizen based in Arizona.',
   },
-  {
-    source: 'Optey retrospective (2026 blog post)',
-    text: "In 2018, Sajiv built Optey — a document-ingestion pipeline with NLP parsing, restructured output, and an adaptive-learning UI. In 2026 terms it was a RAG-based adaptive-learning SaaS, before RAG had a name. The architectural pattern (ingest → structure → personalize) and the cognitive-science framing (the Interactive Learning Model — ILM) hold up. What he missed: the scale of foundation models, embedding-based retrieval, and the fact that the AI layer itself would commoditize while the workflow and UX layer would matter most. His one-line thesis: capable models force complex architectures because they make ambitious products possible.",
-  },
-  {
-    source: '5-post publishing sequence',
-    text: 'Sajiv is executing a 5-post blog sequence over 2026 as part of a 90-day O-1 evidence sprint: (1) the Optey origin story / NLP-before-RAG (published 2026-04-27); (2) BPMN-2018 → AI-2026 bridge; (3) why architects don\'t use the tools built for them; (4) universal IR for multi-notation diagrams; (5) agentic AI for enterprise architecture practice. Tier-1 venue targets: The Open Group, Journal of Enterprise Architecture, IEEE Software, IEEE IT Professional.',
-  },
-  {
-    source: 'Public surfaces',
-    text: 'sajivfrancis.com is the personal portfolio + blog (Astro + MDX, deployed via GitHub Pages). docs.sajivfrancis.com is the architecture knowledge base. Both serve the EA + AI thought-leadership track.',
-  },
 ];
 
-async function getContext(_query: string, _env: Env): Promise<typeof MOCK_CHUNKS> {
-  // TODO Saturday: embed query via OpenAI, query pgvector, return top-K chunks.
-  return MOCK_CHUNKS;
+async function embedQuery(query: string, env: Env): Promise<number[] | null> {
+  try {
+    const r = await fetch('https://api.openai.com/v1/embeddings', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'text-embedding-3-small',
+        input: query,
+      }),
+    });
+    if (!r.ok) {
+      console.error('OpenAI embed error', r.status, await r.text());
+      return null;
+    }
+    const j: any = await r.json();
+    return j.data?.[0]?.embedding ?? null;
+  } catch (e) {
+    console.error('OpenAI embed exception', e);
+    return null;
+  }
+}
+
+async function getContext(query: string, env: Env): Promise<Chunk[]> {
+  const embedding = await embedQuery(query, env);
+  if (!embedding) return MOCK_CHUNKS;
+
+  const sql = postgres(env.DATABASE_URL, {
+    ssl: 'require',
+    max: 1,
+    idle_timeout: 5,
+    connect_timeout: 10,
+  });
+
+  try {
+    const vec = '[' + embedding.join(',') + ']';
+    const rows = await sql<
+      Array<{
+        source_url: string | null;
+        source_path: string | null;
+        text: string;
+        topic: string | null;
+        metadata: any;
+      }>
+    >`
+      SELECT source_url, source_path, text, topic, metadata
+      FROM chunks
+      ORDER BY embedding <=> ${vec}::vector
+      LIMIT 6
+    `;
+    if (!rows.length) return MOCK_CHUNKS;
+
+    return rows.map((r) => {
+      const title =
+        (r.metadata && typeof r.metadata === 'object' && (r.metadata as any).title) ||
+        r.source_path ||
+        r.source_url ||
+        'doc';
+      const topicSuffix = r.topic ? ` — ${r.topic}` : '';
+      return { source: `${title}${topicSuffix}`, text: r.text };
+    });
+  } catch (e) {
+    console.error('pgvector query failed', e);
+    return MOCK_CHUNKS;
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
 }
 
 // ---- CORS -----------------------------------------------------------------
@@ -94,7 +157,7 @@ function corsHeaders(origin: string | null, env: Env): HeadersInit {
 
 async function streamFromAnthropic(
   messages: ChatMessage[],
-  context: typeof MOCK_CHUNKS,
+  context: Chunk[],
   env: Env
 ): Promise<Response> {
   const contextBlock = context
