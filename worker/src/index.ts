@@ -102,6 +102,11 @@ async function getContext(query: string, env: Env): Promise<Chunk[]> {
     max: 1,
     idle_timeout: 5,
     connect_timeout: 10,
+    // Cloudflare Workers free plan: 50 subrequests/invocation. Skip the
+    // setup chatter that postgres.js does by default (server version,
+    // type fetch, prepared statements) so we stay well under.
+    fetch_types: false,
+    prepare: false,
   });
 
   try {
