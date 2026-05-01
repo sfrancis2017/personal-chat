@@ -6,3 +6,6 @@ node_modules/
 .vscode/
 .idea/
 dist/
+
+# Personal runbook — local notes, not for sharing
+RAG_SETUP.md
