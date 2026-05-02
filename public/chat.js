@@ -392,7 +392,7 @@ async function renderMarkdown(container, source) {
     wrap.className = 'mermaid-block';
     try {
       const { svg } = await mermaid.render(id, def);
-      wrap.innerHTML = svg;
+      wrap.innerHTML = expandViewBox(svg, 12);
       wrap.appendChild(buildDiagramActions(wrap, def));
     } catch (e) {
       wrap.classList.add('mermaid-error');
@@ -479,22 +479,44 @@ function buildDiagramActions(wrap, source) {
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
+// Expand mermaid's viewBox by `margin` on each side so node strokes at the
+// edges aren't clipped by sub-pixel rounding when the SVG scales to fit a
+// narrow chat column.
+function expandViewBox(svgString, margin = 12) {
+  return svgString.replace(/viewBox="([^"]+)"/, (_, vb) => {
+    const parts = vb.split(/\s+/).map(Number);
+    if (parts.length !== 4 || parts.some(Number.isNaN)) return `viewBox="${vb}"`;
+    const [x, y, w, h] = parts;
+    return `viewBox="${x - margin} ${y - margin} ${w + margin * 2} ${h + margin * 2}"`;
+  });
+}
+
 // Convert mermaid's foreignObject-based labels to native <text> elements so the
 // downloaded SVG renders in viewers that don't process foreignObject (Illustrator,
 // draw.io, many SVG previewers).
 function inlineForeignObjectsAsText(svg) {
   const fos = Array.from(svg.querySelectorAll('foreignObject'));
   for (const fo of fos) {
-    const lines = [];
-    fo.querySelectorAll('div, p, span').forEach((el) => {
-      // Only leaf text-bearing nodes; skip wrappers
-      if (el.children.length > 0) return;
-      const t = (el.textContent ?? '').trim();
-      if (t) lines.push(t);
-    });
+    // Mermaid puts label content in a span.nodeLabel (or a div fallback) inside
+    // the foreignObject, with <br> for line breaks. textContent flattens those
+    // away — use innerHTML and split on <br> so each line becomes its own tspan.
+    const label = fo.querySelector('span.nodeLabel') || fo.querySelector('div') || fo;
+    const html = label.innerHTML || '';
+    let lines = html
+      .split(/<br\s*\/?>/i)
+      .map((l) => l.replace(/<[^>]+>/g, '').trim())
+      .map((l) =>
+        l
+          .replace(/&amp;/g, '&')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&quot;/g, '"')
+          .replace(/&#39;/g, "'")
+      )
+      .filter(Boolean);
     if (lines.length === 0) {
       const t = (fo.textContent ?? '').trim();
-      if (t) lines.push(t);
+      if (t) lines = [t];
     }
     if (lines.length === 0) {
       fo.remove();
