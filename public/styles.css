@@ -544,6 +544,15 @@ a:hover { text-decoration: underline; }
   margin: 0 auto;
   overflow: visible;
 }
+/* Force mermaid's foreignObject HTML labels to its intended size — otherwise they
+   inherit the assistant body's 17px serif and overflow the measured foreignObject. */
+.mermaid-block foreignObject,
+.mermaid-block foreignObject div,
+.mermaid-block foreignObject span {
+  font-size: 14px;
+  line-height: 1.2;
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+}
 .mermaid-error { text-align: left; }
 .mermaid-error-note {
   color: var(--color-accent);
