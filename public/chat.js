@@ -6,7 +6,7 @@ marked.setOptions({ gfm: true, breaks: false });
 mermaid.initialize({
   startOnLoad: false,
   theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'default',
-  securityLevel: 'strict',
+  securityLevel: 'loose',
   fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
   flowchart: { htmlLabels: true, curve: 'basis' },
 });
@@ -293,7 +293,7 @@ themeToggle.addEventListener('click', () => {
   mermaid.initialize({
     startOnLoad: false,
     theme: next === 'dark' ? 'dark' : 'default',
-    securityLevel: 'strict',
+    securityLevel: 'loose',
     fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
     flowchart: { htmlLabels: true, curve: 'basis' },
   });
