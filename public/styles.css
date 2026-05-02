@@ -255,7 +255,14 @@ a:hover { text-decoration: underline; }
   overflow-x: auto;
   text-align: center;
 }
-.mermaid-block svg { max-width: 100%; height: auto; }
+/* Override mermaid's inline max-width (it sets a fixed pixel value that bursts narrow columns) */
+.mermaid-block svg {
+  max-width: 100% !important;
+  width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
 .mermaid-error { text-align: left; }
 .mermaid-error-note {
   color: var(--color-accent);
