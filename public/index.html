@@ -25,6 +25,13 @@
   </head>
   <body>
     <header class="app-header">
+      <button type="button" id="sidebar-toggle" class="icon-button sidebar-toggle" aria-label="Toggle chats" aria-expanded="false">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <line x1="3" y1="6" x2="21" y2="6"></line>
+          <line x1="3" y1="12" x2="21" y2="12"></line>
+          <line x1="3" y1="18" x2="21" y2="18"></line>
+        </svg>
+      </button>
       <a href="https://sajivfrancis.com" class="brand" aria-label="Sajiv Francis — home">
         <img src="/img/logo.png" alt="Sajiv Francis" width="36" height="36" />
         <span class="brand-text">Chat</span>
@@ -34,6 +41,23 @@
         <span class="theme-icon-dark" aria-hidden="true">☀</span>
       </button>
     </header>
+
+    <aside class="sidebar" id="sidebar" aria-label="Chat history">
+      <div class="sidebar-head">
+        <button type="button" id="new-chat" class="new-chat" aria-label="Start a new chat">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          New chat
+        </button>
+      </div>
+      <div class="sidebar-list" id="sidebar-list" role="list"></div>
+      <div class="sidebar-foot">
+        <span class="sidebar-foot-note">Stored on this device</span>
+      </div>
+    </aside>
+    <div class="sidebar-backdrop" id="sidebar-backdrop" hidden></div>
 
     <main class="conversation" id="conversation" aria-live="polite">
       <div class="welcome">

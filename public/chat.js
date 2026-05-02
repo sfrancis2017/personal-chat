@@ -53,9 +53,79 @@ const themeToggle = document.getElementById('theme-toggle');
 const welcome = document.querySelector('.welcome');
 const topicChips = document.getElementById('topic-chips');
 const topicChipsRow = document.getElementById('topic-chips-row');
+const sidebar = document.getElementById('sidebar');
+const sidebarList = document.getElementById('sidebar-list');
+const sidebarToggle = document.getElementById('sidebar-toggle');
+const sidebarBackdrop = document.getElementById('sidebar-backdrop');
+const newChatBtn = document.getElementById('new-chat');
 
-const history = [];
+// ---- Chat history storage ------------------------------------------------
+// Each chat: {id, title, createdAt, updatedAt, messages: [{role,content}], topics: [string]}
+const HISTORY_KEY = 'chat-history-v1';
+const ACTIVE_KEY = 'chat-history-active';
+
+let chats = [];
+let activeChatId = null;
 const selectedTopics = new Set();
+
+function loadChatsFromStorage() {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveChats() {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(chats));
+    if (activeChatId) localStorage.setItem(ACTIVE_KEY, activeChatId);
+  } catch {
+    // Silent — likely quota; chat still works in-memory
+  }
+}
+
+function makeId() {
+  if (crypto?.randomUUID) return crypto.randomUUID();
+  return `c-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function newChat() {
+  const c = {
+    id: makeId(),
+    title: 'New chat',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    messages: [],
+    topics: [],
+  };
+  chats.unshift(c);
+  return c;
+}
+
+function getActiveChat() {
+  return chats.find((c) => c.id === activeChatId);
+}
+
+function deriveTitle(text) {
+  const first = text.trim().split('\n')[0];
+  return first.length > 40 ? first.slice(0, 40).trim() + '…' : first;
+}
+
+function relativeTime(ts) {
+  const diff = Date.now() - ts;
+  const m = Math.floor(diff / 60000);
+  const h = Math.floor(diff / 3600000);
+  const d = Math.floor(diff / 86400000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  if (h < 24) return `${h}h ago`;
+  if (d < 7) return `${d}d ago`;
+  return new Date(ts).toLocaleDateString();
+}
 
 function prettifyTopic(slug) {
   return slug
@@ -93,7 +163,7 @@ function renderTopics(topics) {
     btn.type = 'button';
     btn.className = 'topic-chip';
     btn.dataset.topic = topic;
-    btn.setAttribute('aria-pressed', 'false');
+    btn.setAttribute('aria-pressed', selectedTopics.has(topic) ? 'true' : 'false');
     btn.title = `${count} chunk${count === 1 ? '' : 's'} indexed`;
     btn.innerHTML = `${prettifyTopic(topic)}<span class="topic-chip-count">${count}</span>`;
     btn.addEventListener('click', () => {
@@ -104,10 +174,161 @@ function renderTopics(topics) {
         selectedTopics.add(topic);
         btn.setAttribute('aria-pressed', 'true');
       }
+      const chat = getActiveChat();
+      if (chat) {
+        chat.topics = [...selectedTopics];
+        saveChats();
+      }
     });
     topicChipsRow.appendChild(btn);
   }
   topicChips.hidden = false;
+}
+
+function refreshChipPressedState() {
+  if (!topicChipsRow) return;
+  topicChipsRow.querySelectorAll('.topic-chip').forEach((btn) => {
+    const t = btn.dataset.topic;
+    btn.setAttribute('aria-pressed', selectedTopics.has(t) ? 'true' : 'false');
+  });
+}
+
+// ---- Sidebar + active-chat orchestration ---------------------------------
+
+function renderSidebar() {
+  sidebarList.replaceChildren();
+  for (const chat of chats) {
+    const row = document.createElement('div');
+    row.className = 'chat-row';
+    row.setAttribute('role', 'listitem');
+    row.dataset.chatId = chat.id;
+    if (chat.id === activeChatId) row.setAttribute('aria-current', 'true');
+
+    const content = document.createElement('div');
+    content.className = 'chat-row-content';
+
+    const title = document.createElement('div');
+    title.className = 'chat-row-title';
+    title.textContent = chat.title;
+    title.title = 'Double-click to rename';
+
+    const meta = document.createElement('div');
+    meta.className = 'chat-row-meta';
+    const preview = chat.messages[chat.messages.length - 1]?.content?.slice(0, 60) ?? '';
+    meta.textContent = preview ? `${relativeTime(chat.updatedAt)} · ${preview}` : relativeTime(chat.updatedAt);
+
+    content.append(title, meta);
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'chat-row-delete';
+    del.setAttribute('aria-label', 'Delete chat');
+    del.innerHTML =
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path></svg>';
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const empty = chat.messages.length === 0;
+      if (empty || confirm(`Delete "${chat.title}"?`)) deleteChat(chat.id);
+    });
+
+    row.append(content, del);
+
+    row.addEventListener('click', () => {
+      if (chat.id !== activeChatId) {
+        setActiveChat(chat.id);
+      }
+      closeMobileSidebar();
+    });
+
+    title.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      title.contentEditable = 'true';
+      title.focus();
+      const range = document.createRange();
+      range.selectNodeContents(title);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    });
+
+    title.addEventListener('blur', () => {
+      title.contentEditable = 'false';
+      const v = title.textContent.trim() || 'Untitled';
+      chat.title = v;
+      title.textContent = v;
+      saveChats();
+    });
+
+    title.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        title.blur();
+      } else if (e.key === 'Escape') {
+        title.textContent = chat.title;
+        title.blur();
+      }
+    });
+
+    sidebarList.appendChild(row);
+  }
+}
+
+function setActiveChat(id) {
+  activeChatId = id;
+  selectedTopics.clear();
+  const chat = getActiveChat();
+  if (chat) for (const t of chat.topics) selectedTopics.add(t);
+  refreshChipPressedState();
+  renderConversation();
+  renderSidebar();
+  saveChats();
+}
+
+function deleteChat(id) {
+  const idx = chats.findIndex((c) => c.id === id);
+  if (idx < 0) return;
+  chats.splice(idx, 1);
+  if (chats.length === 0) {
+    const c = newChat();
+    activeChatId = c.id;
+  } else if (activeChatId === id) {
+    activeChatId = chats[0].id;
+  }
+  saveChats();
+  setActiveChat(activeChatId);
+}
+
+async function renderConversation() {
+  conversation.replaceChildren();
+  if (welcome) {
+    delete welcome.dataset.dismissed;
+    welcome.style.display = '';
+    conversation.appendChild(welcome);
+  }
+  const chat = getActiveChat();
+  if (!chat || chat.messages.length === 0) return;
+  for (const m of chat.messages) {
+    const body = appendMessage(m.role, '');
+    if (m.role === 'assistant') {
+      // Fire-and-forget markdown render; await isn't necessary since each appends to its own node.
+      renderMarkdown(body, m.content).catch(() => {
+        body.textContent = m.content;
+      });
+    } else {
+      body.textContent = m.content;
+    }
+  }
+}
+
+function openMobileSidebar() {
+  sidebar.classList.add('open');
+  sidebarBackdrop.hidden = false;
+  sidebarToggle.setAttribute('aria-expanded', 'true');
+}
+function closeMobileSidebar() {
+  sidebar.classList.remove('open');
+  sidebarBackdrop.hidden = true;
+  sidebarToggle.setAttribute('aria-expanded', 'false');
 }
 
 function scrollToBottom() {
@@ -312,8 +533,18 @@ composer.addEventListener('submit', async (e) => {
   const text = input.value.trim();
   if (!text) return;
 
+  let chat = getActiveChat();
+  if (!chat) {
+    chat = newChat();
+    activeChatId = chat.id;
+  }
+
   appendMessage('user', text);
-  history.push({ role: 'user', content: text });
+  chat.messages.push({ role: 'user', content: text });
+  if (chat.messages.length === 1) chat.title = deriveTitle(text);
+  chat.updatedAt = Date.now();
+  saveChats();
+  renderSidebar();
 
   input.value = '';
   autosize();
@@ -339,7 +570,7 @@ composer.addEventListener('submit', async (e) => {
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
-        messages: history,
+        messages: chat.messages,
         topics: [...selectedTopics],
       }),
     });
@@ -402,7 +633,10 @@ composer.addEventListener('submit', async (e) => {
 
     cursor.remove();
     await renderMarkdown(assistantBody, assistantText);
-    history.push({ role: 'assistant', content: assistantText });
+    chat.messages.push({ role: 'assistant', content: assistantText });
+    chat.updatedAt = Date.now();
+    saveChats();
+    renderSidebar();
   } catch (err) {
     cursor.remove();
     assistantBody.parentElement.classList.remove('assistant');
@@ -415,5 +649,42 @@ composer.addEventListener('submit', async (e) => {
   }
 });
 
-input.focus();
-loadTopics();
+// ---- Init ----------------------------------------------------------------
+
+newChatBtn.addEventListener('click', () => {
+  // Don't pile up empty "New chat" rows — if one exists, jump to it.
+  const empty = chats.find((c) => c.messages.length === 0);
+  if (empty) {
+    setActiveChat(empty.id);
+  } else {
+    const c = newChat();
+    setActiveChat(c.id);
+  }
+  closeMobileSidebar();
+  input.focus();
+});
+
+sidebarToggle.addEventListener('click', () => {
+  if (sidebar.classList.contains('open')) closeMobileSidebar();
+  else openMobileSidebar();
+});
+sidebarBackdrop.addEventListener('click', closeMobileSidebar);
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && sidebar.classList.contains('open')) closeMobileSidebar();
+});
+
+(function init() {
+  chats = loadChatsFromStorage();
+  const storedActive = localStorage.getItem(ACTIVE_KEY);
+  if (chats.length === 0) {
+    const c = newChat();
+    activeChatId = c.id;
+  } else {
+    activeChatId = chats.some((c) => c.id === storedActive) ? storedActive : chats[0].id;
+  }
+  renderSidebar();
+  // setActiveChat re-renders the conversation and applies any saved topics
+  setActiveChat(activeChatId);
+  loadTopics();
+  input.focus();
+})();
