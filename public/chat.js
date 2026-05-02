@@ -6,6 +6,8 @@ const API_URL =
     ? 'http://localhost:8787/chat'
     : 'https://chat-worker.sfrancis2017.workers.dev/chat');
 
+const TOPICS_URL = API_URL.replace(/\/chat\/?$/, '/topics');
+
 const TOKEN_KEY = 'chat-access-token';
 
 function getToken() {
@@ -32,8 +34,64 @@ const input = document.getElementById('input');
 const sendButton = document.getElementById('send');
 const themeToggle = document.getElementById('theme-toggle');
 const welcome = document.querySelector('.welcome');
+const topicChips = document.getElementById('topic-chips');
+const topicChipsRow = document.getElementById('topic-chips-row');
 
 const history = [];
+const selectedTopics = new Set();
+
+function prettifyTopic(slug) {
+  return slug
+    .split('-')
+    .map((w) =>
+      w.length <= 3 && w.toUpperCase() === w.toUpperCase()
+        ? w.toUpperCase().replace(/[^A-Z0-9]/g, '')
+        : w.charAt(0).toUpperCase() + w.slice(1)
+    )
+    .join(' ');
+}
+
+async function loadTopics() {
+  const token = localStorage.getItem(TOKEN_KEY);
+  // Don't trigger an auth prompt just to load chips — wait for first message.
+  if (!token) return;
+  try {
+    const r = await fetch(TOPICS_URL, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!r.ok) return;
+    const j = await r.json();
+    const topics = Array.isArray(j.topics) ? j.topics : [];
+    if (!topics.length) return;
+    renderTopics(topics);
+  } catch {
+    // silent — chips are optional
+  }
+}
+
+function renderTopics(topics) {
+  topicChipsRow.replaceChildren();
+  for (const { topic, count } of topics) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'topic-chip';
+    btn.dataset.topic = topic;
+    btn.setAttribute('aria-pressed', 'false');
+    btn.title = `${count} chunk${count === 1 ? '' : 's'} indexed`;
+    btn.innerHTML = `${prettifyTopic(topic)}<span class="topic-chip-count">${count}</span>`;
+    btn.addEventListener('click', () => {
+      if (selectedTopics.has(topic)) {
+        selectedTopics.delete(topic);
+        btn.setAttribute('aria-pressed', 'false');
+      } else {
+        selectedTopics.add(topic);
+        btn.setAttribute('aria-pressed', 'true');
+      }
+    });
+    topicChipsRow.appendChild(btn);
+  }
+  topicChips.hidden = false;
+}
 
 function scrollToBottom() {
   conversation.scrollTop = conversation.scrollHeight;
@@ -99,6 +157,8 @@ composer.addEventListener('submit', async (e) => {
   try {
     const token = getToken();
     if (!token) throw new Error('Access token required.');
+    // Lazy-load chips after first token entry (initial loadTopics() bails if no token).
+    if (topicChips.hidden) loadTopics();
 
     const res = await fetch(API_URL, {
       method: 'POST',
@@ -106,7 +166,10 @@ composer.addEventListener('submit', async (e) => {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ messages: history }),
+      body: JSON.stringify({
+        messages: history,
+        topics: [...selectedTopics],
+      }),
     });
 
     if (res.status === 401) {
@@ -180,3 +243,4 @@ composer.addEventListener('submit', async (e) => {
 });
 
 input.focus();
+loadTopics();

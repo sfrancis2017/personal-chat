@@ -41,16 +41,23 @@ interface ChatMessage {
 
 interface ChatRequest {
   messages: ChatMessage[];
+  topics?: string[];
 }
 
-const SYSTEM_PROMPT = `You are a personal assistant grounded in Sajiv Francis's published writing, architecture notes, and talks. You speak about him in the third person ("Sajiv has written…", "his view is…").
-
-Rules:
-1. Answer ONLY from the provided <context> blocks. If the context does not cover the question, say so plainly — do not invent facts about Sajiv.
-2. Quote or paraphrase tightly. Don't pad.
-3. Never name Sajiv's employer. He works at "a Fortune 50 technology company."
-4. If a question is off-topic from his work (general trivia, current events, code help), redirect: "This chat is grounded in Sajiv's writing — try sajivfrancis.com or docs.sajivfrancis.com for that."
-5. Voice: direct, lightly editorial. Match Stratechery / Dan Luu register. No hedging, no "I'd be happy to help."`;
+const SYSTEM_PROMPT = `You are a personal assistant grounded in Sajiv Francis's published writing, architecture notes, talks, and cloud  materials. You speak about him in the third person.                             
+                                     
+Rules:                          
+1. Ground your answers in the provided <context> blocks. Synthesize and reason from them, applying general technical knowledge to interpret what's there or fill gaps in framing. Don't invent specific facts about Sajiv personally (his projects, opinions, history) that aren't in the context — for those, say plainly what's missing.
+2. Don't pad. Match the Stratechery / Dan Luu register: direct, lightly editorial, no hedging, no "happy to help."                                                                        
+3. Never name Sajiv's employer. He works at "a Fortune 50 technology company."                                                                                                            
+4. If a question is completely off-topic (general trivia, current events, unrelated to Sajiv's work or technical interests), redirect: "This chat is grounded in Sajiv's writing — try sajivfrancis.com or docs.sajivfrancis.com."                                                                                                                                               
+                                                                                                                                                                                          
+Format:                                                                                                                                                                                   
+- Use Markdown freely — headings (## / ###), tables, bullet lists, code blocks. The chat renders Markdown.
+- For complex analytical questions (architecture decisions, comparisons, design tradeoffs), structure as: short summary → context → analysis → recommendation. Keep simple factual answ.                                                                                                                                                                                   
+- For process flows, system architectures, or component relationships, emit a Mermaid diagram in a \`\`\`mermaid fence — the chat renders it inline.                                      
+- Cite source chunks inline as italics, e.g. *(LocalizedSLMBuild.md)* or *(BPMN — S4HANA / J62_S4HANA_ASSETACCOUNTING)*, using each chunk's source attribute.                             
+- End every substantive response with a **Sources** heading and a deduped bullet list of the source attributes you cited.`;  
 
 // ---- Context retrieval: OpenAI embedding → pgvector top-K ----------------
 
@@ -93,9 +100,17 @@ async function embedQuery(query: string, env: Env): Promise<number[] | null> {
   }
 }
 
-async function getContext(query: string, env: Env): Promise<Chunk[]> {
+async function getContext(
+  query: string,
+  topics: string[] | undefined,
+  env: Env
+): Promise<Chunk[]> {
   const embedding = await embedQuery(query, env);
   if (!embedding) return MOCK_CHUNKS;
+
+  const cleanTopics = (topics ?? [])
+    .map((t) => (typeof t === 'string' ? t.trim() : ''))
+    .filter(Boolean);
 
   try {
     const r = await fetch(env.RETRIEVE_URL, {
@@ -104,7 +119,9 @@ async function getContext(query: string, env: Env): Promise<Chunk[]> {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${env.RETRIEVE_TOKEN}`,
       },
-      body: JSON.stringify({ embedding }),
+      body: JSON.stringify(
+        cleanTopics.length ? { embedding, topics: cleanTopics } : { embedding }
+      ),
     });
     if (!r.ok) {
       console.error('retrieve API error', r.status, await r.text());
@@ -253,6 +270,32 @@ export default {
       });
     }
 
+    if (url.pathname === '/topics' && req.method === 'GET') {
+      if (!isAuthorized(req, env)) {
+        return new Response(JSON.stringify({ error: 'unauthorized' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      try {
+        // Derive the /topics URL from RETRIEVE_URL (which points at /retrieve)
+        const topicsUrl = env.RETRIEVE_URL.replace(/\/retrieve\/?$/, '/topics');
+        const r = await fetch(topicsUrl, {
+          headers: { Authorization: `Bearer ${env.RETRIEVE_TOKEN}` },
+        });
+        const body = await r.text();
+        return new Response(body, {
+          status: r.status,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: String(e) }), {
+          status: 502,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+    }
+
     if (url.pathname === '/chat' && req.method === 'POST') {
       if (!isAuthorized(req, env)) {
         return new Response(
@@ -276,7 +319,7 @@ export default {
 
       const lastUser = [...body.messages].reverse().find((m) => m.role === 'user');
       const query = lastUser?.content ?? '';
-      const context = await getContext(query, env);
+      const context = await getContext(query, body.topics, env);
 
       const streamResp = await streamFromAnthropic(body.messages, context, env);
       // Merge CORS into the streaming response
