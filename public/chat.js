@@ -1,3 +1,16 @@
+import { marked } from 'https://esm.sh/marked@13.0.3';
+import DOMPurify from 'https://esm.sh/dompurify@3.1.7';
+import mermaid from 'https://esm.sh/mermaid@10.9.1';
+
+marked.setOptions({ gfm: true, breaks: false });
+mermaid.initialize({
+  startOnLoad: false,
+  theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'default',
+  securityLevel: 'strict',
+  fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+  flowchart: { htmlLabels: true, curve: 'basis' },
+});
+
 // Worker endpoint. Override via ?api=https://your-worker.dev for local testing.
 const params = new URLSearchParams(window.location.search);
 const API_URL =
@@ -97,6 +110,87 @@ function scrollToBottom() {
   conversation.scrollTop = conversation.scrollHeight;
 }
 
+let mermaidIdCounter = 0;
+
+async function renderMarkdown(container, source) {
+  // Render markdown → HTML, sanitize, then promote any ```mermaid fences to SVG.
+  const html = marked.parse(source);
+  const clean = DOMPurify.sanitize(html);
+  container.innerHTML = clean;
+
+  const blocks = container.querySelectorAll('pre > code.language-mermaid');
+  for (const code of blocks) {
+    const def = code.textContent ?? '';
+    const id = `mermaid-${Date.now()}-${++mermaidIdCounter}`;
+    const wrap = document.createElement('div');
+    wrap.className = 'mermaid-block';
+    try {
+      const { svg } = await mermaid.render(id, def);
+      wrap.innerHTML = svg;
+      wrap.appendChild(buildDiagramActions(wrap, def));
+    } catch (e) {
+      wrap.classList.add('mermaid-error');
+      wrap.innerHTML = `<pre><code>${escapeHtml(def)}</code></pre>`;
+      const note = document.createElement('div');
+      note.className = 'mermaid-error-note';
+      note.textContent = `Diagram render failed: ${e?.message ?? e}`;
+      wrap.prepend(note);
+    }
+    code.parentElement.replaceWith(wrap);
+  }
+  scrollToBottom();
+}
+
+function buildDiagramActions(wrap, source) {
+  const actions = document.createElement('div');
+  actions.className = 'mermaid-actions';
+
+  const copyBtn = document.createElement('button');
+  copyBtn.type = 'button';
+  copyBtn.className = 'mermaid-action';
+  copyBtn.textContent = 'Copy source';
+  copyBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(source);
+      copyBtn.textContent = 'Copied';
+    } catch {
+      copyBtn.textContent = 'Copy failed';
+    }
+    setTimeout(() => (copyBtn.textContent = 'Copy source'), 1500);
+  });
+
+  const dlBtn = document.createElement('button');
+  dlBtn.type = 'button';
+  dlBtn.className = 'mermaid-action';
+  dlBtn.textContent = 'Download SVG';
+  dlBtn.addEventListener('click', () => {
+    const svgEl = wrap.querySelector('svg');
+    if (!svgEl) return;
+    const xml = new XMLSerializer().serializeToString(svgEl);
+    const blob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `diagram-${Date.now()}.svg`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  });
+
+  actions.append(copyBtn, dlBtn);
+  return actions;
+}
+
+function escapeHtml(s) {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function appendMessage(role, text = '') {
   if (welcome && !welcome.dataset.dismissed) {
     welcome.dataset.dismissed = 'true';
@@ -133,6 +227,14 @@ themeToggle.addEventListener('click', () => {
   const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
   document.documentElement.dataset.theme = next;
   localStorage.setItem('theme', next);
+  // Re-init mermaid with the new theme; existing diagrams stay as-is until next render.
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: next === 'dark' ? 'dark' : 'default',
+    securityLevel: 'strict',
+    fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+    flowchart: { htmlLabels: true, curve: 'basis' },
+  });
 });
 
 composer.addEventListener('submit', async (e) => {
@@ -229,6 +331,7 @@ composer.addEventListener('submit', async (e) => {
     }
 
     cursor.remove();
+    await renderMarkdown(assistantBody, assistantText);
     history.push({ role: 'assistant', content: assistantText });
   } catch (err) {
     cursor.remove();

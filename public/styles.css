@@ -173,6 +173,119 @@ a:hover { text-decoration: underline; }
   font-size: 1.0625rem;
 }
 
+/* Rendered Markdown inside assistant messages */
+.message.assistant .body h1,
+.message.assistant .body h2,
+.message.assistant .body h3,
+.message.assistant .body h4 {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  margin: 1.25rem 0 0.5rem;
+}
+.message.assistant .body h1 { font-size: 1.4rem; }
+.message.assistant .body h2 { font-size: 1.2rem; }
+.message.assistant .body h3 { font-size: 1.05rem; }
+.message.assistant .body h4 { font-size: 1rem; }
+
+.message.assistant .body p { margin: 0.5rem 0; }
+.message.assistant .body ul,
+.message.assistant .body ol { padding-left: 1.25rem; margin: 0.5rem 0; }
+.message.assistant .body li { margin: 0.2rem 0; }
+
+.message.assistant .body code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  padding: 0.05em 0.35em;
+  border-radius: 0.25rem;
+}
+
+.message.assistant .body pre {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 0.875rem;
+  overflow-x: auto;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+.message.assistant .body pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+}
+
+.message.assistant .body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.75rem 0;
+  font-family: var(--font-sans);
+  font-size: 0.9375rem;
+}
+.message.assistant .body th,
+.message.assistant .body td {
+  border: 1px solid var(--color-border);
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+}
+.message.assistant .body th {
+  background: var(--color-bg-elevated);
+  font-weight: 600;
+}
+
+.message.assistant .body blockquote {
+  border-left: 3px solid var(--color-border-strong);
+  margin: 0.75rem 0;
+  padding: 0.25rem 0.875rem;
+  color: var(--color-fg-muted);
+}
+
+/* Mermaid */
+.mermaid-block {
+  margin: 0.875rem 0;
+  padding: 0.75rem;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  text-align: center;
+}
+.mermaid-block svg { max-width: 100%; height: auto; }
+.mermaid-error { text-align: left; }
+.mermaid-error-note {
+  color: var(--color-accent);
+  font-size: 0.8125rem;
+  font-family: var(--font-sans);
+  margin-bottom: 0.5rem;
+}
+
+.mermaid-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 0.625rem;
+  font-family: var(--font-sans);
+}
+.mermaid-action {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-fg-muted);
+  font-size: 0.75rem;
+  padding: 0.25rem 0.625rem;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color 150ms ease, color 150ms ease;
+}
+.mermaid-action:hover {
+  border-color: var(--color-border-strong);
+  color: var(--color-fg);
+}
+
 .message.error .body {
   color: var(--color-accent);
   font-style: italic;
