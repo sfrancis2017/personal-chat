@@ -388,7 +388,11 @@ body.sidebar-collapsed .sidebar {
   gap: 1.5rem;
   min-height: 0;
   min-width: 0;
+  /* overflow-y for vertical scrolling of message history;
+     overflow-x: hidden so a wide diagram can't grow the conversation past its
+     grid track (clips visually — mermaid-block has its own internal scroll). */
   overflow-y: auto;
+  overflow-x: hidden;
   scroll-behavior: smooth;
 }
 
@@ -627,6 +631,7 @@ body.sidebar-collapsed .sidebar {
 
 .mermaid-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   justify-content: flex-end;
   margin-top: 0.625rem;

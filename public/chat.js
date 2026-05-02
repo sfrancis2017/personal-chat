@@ -464,6 +464,14 @@ async function renderMarkdown(container, source) {
   scrollToBottom();
 }
 
+function prefillComposer(text) {
+  input.value = text;
+  autosize();
+  input.focus();
+  // Cursor at end so user can keep typing
+  input.setSelectionRange(text.length, text.length);
+}
+
 function buildDiagramActions(wrap, source) {
   const actions = document.createElement('div');
   actions.className = 'mermaid-actions';
@@ -476,6 +484,26 @@ function buildDiagramActions(wrap, source) {
     const svg = wrap.querySelector('svg');
     if (svg) openDiagramModal(svg);
   });
+
+  const explainBtn = document.createElement('button');
+  explainBtn.type = 'button';
+  explainBtn.className = 'mermaid-action';
+  explainBtn.textContent = 'Explain';
+  explainBtn.addEventListener('click', () =>
+    prefillComposer(
+      'Walk me through that diagram step by step — explain each section, key flows, and any technical details. Cite sources where relevant.'
+    )
+  );
+
+  const regenBtn = document.createElement('button');
+  regenBtn.type = 'button';
+  regenBtn.className = 'mermaid-action';
+  regenBtn.textContent = 'Regenerate';
+  regenBtn.addEventListener('click', () =>
+    prefillComposer(
+      'Regenerate that diagram with a cleaner layout, clearer labels, and the same technical accuracy.'
+    )
+  );
 
   const copyBtn = document.createElement('button');
   copyBtn.type = 'button';
@@ -516,7 +544,7 @@ function buildDiagramActions(wrap, source) {
     URL.revokeObjectURL(url);
   });
 
-  actions.append(expandBtn, copyBtn, dlBtn);
+  actions.append(expandBtn, explainBtn, regenBtn, copyBtn, dlBtn);
   return actions;
 }
 
