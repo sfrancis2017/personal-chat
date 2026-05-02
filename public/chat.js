@@ -1,6 +1,6 @@
 import { marked } from 'https://esm.sh/marked@13.0.3';
 import DOMPurify from 'https://esm.sh/dompurify@3.1.7';
-import mermaid from 'https://esm.sh/mermaid@10.9.1';
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.esm.min.mjs';
 
 marked.setOptions({ gfm: true, breaks: false });
 mermaid.initialize({
