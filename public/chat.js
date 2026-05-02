@@ -418,6 +418,15 @@ async function renderMarkdown(container, source) {
     try {
       const { svg } = await mermaid.render(id, def);
       wrap.innerHTML = expandViewBox(svg, 12);
+      // Strip mermaid's width="100%" attr and inline style="max-width: <px>".
+      // Without these, only our CSS controls sizing — eliminates the
+      // attribute-vs-CSS interaction that lets the SVG push parent containers wider.
+      const svgEl = wrap.querySelector('svg');
+      if (svgEl) {
+        svgEl.removeAttribute('width');
+        svgEl.removeAttribute('height');
+        svgEl.removeAttribute('style');
+      }
       wrap.appendChild(buildDiagramActions(wrap, def));
     } catch (e) {
       wrap.classList.add('mermaid-error');
