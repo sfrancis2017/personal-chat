@@ -426,6 +426,46 @@ export default {
       }
     }
 
+    if (url.pathname === '/ingest' && req.method === 'POST') {
+      if (!isAuthorized(req, env)) {
+        return new Response(JSON.stringify({ error: 'unauthorized' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      // 25 MB raw → ~33 MB base64 + JSON overhead. Cap at 50 MB request body.
+      const MAX_REQ = 50 * 1024 * 1024;
+      const lenHeader = req.headers.get('Content-Length');
+      if (lenHeader && Number(lenHeader) > MAX_REQ) {
+        return new Response(JSON.stringify({ error: 'request too large (25 MB max raw file)' }), {
+          status: 413,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      try {
+        const ingestUrl = env.RETRIEVE_URL.replace(/\/retrieve\/?$/, '/ingest');
+        const body = await req.text();
+        const r = await fetch(ingestUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${env.RETRIEVE_TOKEN}`,
+          },
+          body,
+        });
+        const respText = await r.text();
+        return new Response(respText, {
+          status: r.status,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: String(e) }), {
+          status: 502,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+    }
+
     if (url.pathname === '/chat' && req.method === 'POST') {
       if (!isAuthorized(req, env)) {
         return new Response(

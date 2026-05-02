@@ -95,6 +95,14 @@
             <option value="adversarial-review">Adversarial Review</option>
           </select>
         </label>
+        <button type="button" id="upload-doc" class="sidebar-secondary-btn" hidden aria-label="Upload a document to the index">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="17 8 12 3 7 8"></polyline>
+            <line x1="12" y1="3" x2="12" y2="15"></line>
+          </svg>
+          Upload doc
+        </button>
       </div>
       <div class="sidebar-list" id="sidebar-list" role="list"></div>
       <details class="sidebar-prompts" id="sidebar-prompts">
@@ -143,6 +151,36 @@
       Answers generated are based on material from:
       <a href="https://sajivfrancis.com">sajivfrancis.com</a>.
     </p>
+
+    <div class="upload-modal" id="upload-modal" hidden role="dialog" aria-modal="true" aria-label="Upload document">
+      <div class="upload-modal-card">
+        <header class="upload-modal-head">
+          <h2>Upload document</h2>
+          <button type="button" class="upload-modal-close" id="upload-modal-close" aria-label="Close">×</button>
+        </header>
+        <form id="upload-form" class="upload-form">
+          <label class="upload-field">
+            <span>File</span>
+            <input type="file" id="upload-file" required />
+            <span class="upload-hint" id="upload-file-hint">PDF, DOCX, PPTX, XLSX, MD, TXT, CSV, IPYNB, XML/BPMN/DRAWIO/SVG. 25 MB max.</span>
+          </label>
+          <label class="upload-field">
+            <span>Topic</span>
+            <input type="text" id="upload-topic" required placeholder="e.g. ai-and-llms" autocomplete="off" />
+            <span class="upload-hint">Slugified automatically. Existing topics: see chips above the composer.</span>
+          </label>
+          <label class="upload-field upload-field-row">
+            <input type="checkbox" id="upload-public" />
+            <span>Public — eligible for the public-mode chat (when enabled). Default is private.</span>
+          </label>
+          <div class="upload-status" id="upload-status" aria-live="polite"></div>
+          <div class="upload-actions">
+            <button type="button" id="upload-cancel" class="preview-action">Cancel</button>
+            <button type="submit" id="upload-submit" class="preview-action preview-action-primary">Upload &amp; embed</button>
+          </div>
+        </form>
+      </div>
+    </div>
 
     <div class="diagram-modal" id="diagram-modal" hidden role="dialog" aria-modal="true" aria-label="Diagram full view">
       <button type="button" class="diagram-modal-close" id="diagram-modal-close" aria-label="Close diagram view">×</button>

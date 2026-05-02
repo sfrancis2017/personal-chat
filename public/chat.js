@@ -54,6 +54,14 @@ function getToken() {
 
 function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
+  refreshAuthGatedUI();
+}
+
+// UI elements that only make sense for token-holders (admin/owner mode).
+// Public visitors (no token) shouldn't see these.
+function refreshAuthGatedUI() {
+  const hasToken = !!localStorage.getItem(TOKEN_KEY);
+  if (uploadDocBtn) uploadDocBtn.hidden = !hasToken;
 }
 
 const conversation = document.getElementById('conversation');
@@ -757,6 +765,7 @@ composer.addEventListener('submit', async (e) => {
     if (!token) throw new Error('Access token required.');
     // Lazy-load chips after first token entry (initial loadTopics() bails if no token).
     if (topicChips.hidden) loadTopics();
+    refreshAuthGatedUI();
 
     const res = await fetch(API_URL, {
       method: 'POST',
@@ -910,6 +919,16 @@ const previewSavePdfBtn = document.getElementById('preview-save-pdf');
 const previewSavePptBtn = document.getElementById('preview-save-ppt');
 const previewEmailBtn = document.getElementById('preview-email');
 const previewPrintHeaderEl = document.getElementById('preview-print-header');
+const uploadDocBtn = document.getElementById('upload-doc');
+const uploadModal = document.getElementById('upload-modal');
+const uploadModalCloseBtn = document.getElementById('upload-modal-close');
+const uploadForm = document.getElementById('upload-form');
+const uploadFileInput = document.getElementById('upload-file');
+const uploadTopicInput = document.getElementById('upload-topic');
+const uploadPublicCheckbox = document.getElementById('upload-public');
+const uploadStatusEl = document.getElementById('upload-status');
+const uploadCancelBtn = document.getElementById('upload-cancel');
+const uploadSubmitBtn = document.getElementById('upload-submit');
 const pphTitleEl = document.getElementById('pph-title');
 const pphMetaEl = document.getElementById('pph-meta');
 
@@ -1283,6 +1302,130 @@ if (previewSavePptBtn) {
   previewSavePptBtn.addEventListener('click', savePreviewAsPpt);
 }
 
+// ---- Upload-doc modal ---------------------------------------------------
+
+const UPLOAD_URL = API_URL.replace(/\/chat\/?$/, '/ingest');
+const UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+
+function openUploadModal() {
+  if (!uploadModal) return;
+  uploadStatusEl.textContent = '';
+  uploadStatusEl.className = 'upload-status';
+  uploadFileInput.value = '';
+  uploadTopicInput.value = '';
+  uploadPublicCheckbox.checked = false;
+  uploadModal.hidden = false;
+  document.body.style.overflow = 'hidden';
+  setTimeout(() => uploadFileInput.focus(), 50);
+}
+function closeUploadModal() {
+  if (!uploadModal) return;
+  uploadModal.hidden = true;
+  document.body.style.overflow = '';
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      // result is a data URL "data:<mime>;base64,<payload>"; strip the prefix
+      const result = reader.result;
+      if (typeof result !== 'string') {
+        reject(new Error('unexpected reader result'));
+        return;
+      }
+      const idx = result.indexOf(',');
+      resolve(idx === -1 ? result : result.slice(idx + 1));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('file read failed'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function submitUpload(event) {
+  event.preventDefault();
+  if (!uploadForm) return;
+
+  const file = uploadFileInput.files?.[0];
+  if (!file) {
+    uploadStatusEl.textContent = 'Pick a file first.';
+    uploadStatusEl.className = 'upload-status upload-status-error';
+    return;
+  }
+  if (file.size > UPLOAD_MAX_BYTES) {
+    uploadStatusEl.textContent = `File too large: ${(file.size / 1024 / 1024).toFixed(1)} MB (limit 25 MB).`;
+    uploadStatusEl.className = 'upload-status upload-status-error';
+    return;
+  }
+  const topic = uploadTopicInput.value.trim();
+  if (!topic) {
+    uploadStatusEl.textContent = 'Topic is required.';
+    uploadStatusEl.className = 'upload-status upload-status-error';
+    return;
+  }
+
+  uploadSubmitBtn.disabled = true;
+  uploadCancelBtn.disabled = true;
+  uploadStatusEl.textContent = `Reading ${file.name}…`;
+  uploadStatusEl.className = 'upload-status';
+
+  try {
+    const token = getToken();
+    if (!token) throw new Error('Access token required.');
+
+    const content_base64 = await fileToBase64(file);
+    uploadStatusEl.textContent = `Uploading + embedding (this may take 10–60 seconds)…`;
+
+    const res = await fetch(UPLOAD_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        filename: file.name,
+        content_base64,
+        topic,
+        visibility: uploadPublicCheckbox.checked ? 'public' : 'private',
+      }),
+    });
+
+    const text = await res.text();
+    let body = {};
+    try { body = JSON.parse(text); } catch { /* keep empty */ }
+
+    if (!res.ok) {
+      const msg = body.error || `HTTP ${res.status}`;
+      throw new Error(msg);
+    }
+
+    uploadStatusEl.textContent = `Indexed ${body.chunks ?? 0} chunks from ${body.filename ?? file.name} (topic: ${body.topic ?? topic}).`;
+    uploadStatusEl.className = 'upload-status upload-status-success';
+    // Refresh the topic chips so a new topic shows up immediately
+    loadTopics();
+    setTimeout(() => closeUploadModal(), 1500);
+  } catch (err) {
+    uploadStatusEl.textContent = `Upload failed: ${err?.message ?? err}`;
+    uploadStatusEl.className = 'upload-status upload-status-error';
+  } finally {
+    uploadSubmitBtn.disabled = false;
+    uploadCancelBtn.disabled = false;
+  }
+}
+
+if (uploadDocBtn) uploadDocBtn.addEventListener('click', openUploadModal);
+if (uploadModalCloseBtn) uploadModalCloseBtn.addEventListener('click', closeUploadModal);
+if (uploadCancelBtn) uploadCancelBtn.addEventListener('click', closeUploadModal);
+if (uploadForm) uploadForm.addEventListener('submit', submitUpload);
+if (uploadModal) {
+  uploadModal.addEventListener('click', (e) => {
+    if (e.target === uploadModal) closeUploadModal();
+  });
+}
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && uploadModal && !uploadModal.hidden) closeUploadModal();
+});
+
 if (previewEmailBtn) {
   previewEmailBtn.addEventListener('click', () => {
     if (!previewMarkdown) return;
@@ -1357,5 +1500,6 @@ window.addEventListener('keydown', (e) => {
   // setActiveChat re-renders the conversation and applies any saved topics
   setActiveChat(activeChatId);
   loadTopics();
+  refreshAuthGatedUI();
   input.focus();
 })();
