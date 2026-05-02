@@ -537,21 +537,26 @@ body.sidebar-collapsed .sidebar {
   color: var(--color-fg-muted);
 }
 
-/* Mermaid */
+/* Mermaid — diagram block has its own horizontal scroll, contained from parents.
+   width:100% + max-width:100% pin the block to parent width; the SVG inside is
+   allowed to render at its natural intrinsic size and scrolls within the block. */
 .mermaid-block {
   margin: 0.875rem 0;
   padding: 0.75rem 0.75rem 1.25rem;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
+  width: 100%;
+  max-width: 100%;
   overflow-x: auto;
   text-align: center;
 }
-/* Override mermaid's inline max-width (sets a fixed pixel value that bursts narrow
-   columns). Force width:100% so the SVG always tracks parent on resize. */
 .mermaid-block svg {
-  max-width: 100% !important;
-  width: 100% !important;
+  /* Override mermaid's defaults — let SVG be natural width from viewBox; the
+     block above it scrolls when needed instead of forcing the page wide. */
+  max-width: none !important;
+  width: max-content !important;
+  min-width: 100%;
   height: auto;
   display: block;
   margin: 0 auto;
