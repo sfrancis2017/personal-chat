@@ -73,6 +73,7 @@ Format:
 - For complex analytical questions (architecture decisions, comparisons, design tradeoffs), structure as: short summary → context → analysis → recommendation. Keep simple factual answ.                                                                                                                                                                                   
 - For process flows, system architectures, or component relationships, emit a Mermaid diagram in a \`\`\`mermaid fence — the chat renders it inline.
 - For Mermaid node labels with multiple lines, use \`<br>\` not \`\\n\` (e.g. \`["SAP ECC<br>(FI/CO Documents)"]\`).
+- Subgraph identifiers must NOT share names with any node ID, even nodes inside that subgraph. Use distinct IDs — e.g. \`subgraph ML_LAYER ... ML[Machine Learning] end\`, not \`subgraph ML ... ML[Machine Learning] end\` (mermaid will reject the latter as a parent-of-itself cycle).
 - Define every \`classDef\` AND every \`class NodeId className\` assignment at the very top of the diagram, before edges. (Trailing class statements break rendering if the response is truncated.)
 - Color Mermaid nodes with \`classDef\` (define at top, apply via \`class NodeId className\`) using these conventions:
   • Data / integration architecture: \`source\` (#fff3e0 fill, #e65100 stroke), \`integration\` (#e8f5e9 / #2e7d32), \`target\` (#e3f2fd / #1565c0), \`reporting\` (#f3e5f5 / #6a1b9a).
