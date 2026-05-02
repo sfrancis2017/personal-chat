@@ -8,7 +8,11 @@ mermaid.initialize({
   theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'default',
   securityLevel: 'loose',
   fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
-  flowchart: { htmlLabels: true, curve: 'basis' },
+  flowchart: { htmlLabels: true, curve: 'basis', useMaxWidth: true },
+  themeVariables: {
+    fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+    fontSize: '14px',
+  },
 });
 
 // Worker endpoint. Override via ?api=https://your-worker.dev for local testing.
@@ -295,7 +299,11 @@ themeToggle.addEventListener('click', () => {
     theme: next === 'dark' ? 'dark' : 'default',
     securityLevel: 'loose',
     fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
-    flowchart: { htmlLabels: true, curve: 'basis' },
+    flowchart: { htmlLabels: true, curve: 'basis', useMaxWidth: true },
+  themeVariables: {
+    fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+    fontSize: '14px',
+  },
   });
 });
 
