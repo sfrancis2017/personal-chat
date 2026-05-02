@@ -60,6 +60,10 @@ const sidebarBackdrop = document.getElementById('sidebar-backdrop');
 const newChatBtn = document.getElementById('new-chat');
 const promptsList = document.getElementById('sidebar-prompts-list');
 const skillSelect = document.getElementById('skill-select');
+const exportPdfBtn = document.getElementById('export-pdf');
+const printHeaderEl = document.getElementById('print-header');
+const printTitleEl = document.getElementById('print-title');
+const printDateEl = document.getElementById('print-date');
 
 // Quick prompts — small set tuned for EA / software engineering use of the corpus.
 const QUICK_PROMPTS = [
@@ -861,6 +865,31 @@ if (skillSelect) {
     if (!chat) return;
     chat.skill = skillSelect.value || undefined;
     saveChats();
+  });
+}
+
+if (exportPdfBtn) {
+  exportPdfBtn.addEventListener('click', () => {
+    const chat = getActiveChat();
+    if (!chat || chat.messages.length === 0) {
+      alert('Nothing to export — start a conversation first.');
+      return;
+    }
+    if (printTitleEl) printTitleEl.textContent = chat.title || 'Chat';
+    if (printDateEl) {
+      printDateEl.textContent = new Date(chat.updatedAt).toLocaleDateString(undefined, {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      });
+    }
+    if (printHeaderEl) printHeaderEl.hidden = false;
+    // Slight delay so the DOM update lands before print dialog
+    setTimeout(() => {
+      window.print();
+      // Re-hide after dialog closes (it's blocking, so this runs after)
+      if (printHeaderEl) printHeaderEl.hidden = true;
+    }, 50);
   });
 }
 

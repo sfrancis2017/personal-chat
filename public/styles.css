@@ -796,6 +796,164 @@ body.sidebar-collapsed .sidebar {
   .footnote { grid-column: 1; padding: 0; }
 }
 
+/* ---- Print / PDF export ------------------------------------------------- */
+
+/* Print header hidden on screen */
+.print-header { display: none; }
+
+@media print {
+  /* Hide all UI chrome */
+  .sidebar,
+  .sidebar-backdrop,
+  .app-header,
+  .topic-chips,
+  .composer,
+  .footnote,
+  .mermaid-actions,
+  .code-copy,
+  .diagram-modal,
+  .cursor {
+    display: none !important;
+  }
+
+  /* Reset body to a single column document layout */
+  html, body {
+    background: white !important;
+    color: black !important;
+  }
+  body {
+    display: block !important;
+    grid-template: none !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    min-height: 0 !important;
+  }
+  body.sidebar-collapsed {
+    grid-template-columns: none !important;
+  }
+
+  /* Print header (set visible by JS before print) */
+  .print-header {
+    display: block !important;
+    border-bottom: 2px solid #000;
+    padding: 0 0 0.75rem;
+    margin: 0 0 1.5rem;
+    page-break-after: avoid;
+  }
+  .print-title {
+    font-family: var(--font-sans);
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin: 0 0 0.25rem;
+    letter-spacing: -0.01em;
+  }
+  .print-meta {
+    font-family: var(--font-sans);
+    font-size: 0.75rem;
+    color: #555;
+    margin: 0;
+  }
+
+  /* Conversation: just a stack of messages */
+  .conversation {
+    overflow: visible !important;
+    display: block !important;
+    padding: 0 !important;
+    max-height: none !important;
+  }
+
+  .welcome { display: none; }
+
+  /* Message styling — whitepaper register */
+  .message {
+    page-break-inside: avoid;
+    margin-bottom: 1.25rem;
+    display: block !important;
+  }
+  .message .role {
+    font-family: var(--font-sans);
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #555 !important;
+    margin-bottom: 0.25rem;
+  }
+  .message.user .role { color: #000 !important; }
+  .message.assistant .role { color: #999 !important; }
+
+  .message .body,
+  .message.assistant .body {
+    font-family: 'Source Serif 4', Georgia, serif !important;
+    font-size: 11pt !important;
+    line-height: 1.5 !important;
+    color: black !important;
+  }
+
+  /* Headings: keep with following paragraph */
+  .message.assistant .body h1,
+  .message.assistant .body h2,
+  .message.assistant .body h3,
+  .message.assistant .body h4 {
+    page-break-after: avoid;
+    color: black !important;
+  }
+
+  /* Diagrams: keep on one page if they fit, vector-quality SVG */
+  .mermaid-block {
+    page-break-inside: avoid;
+    background: white !important;
+    border: 1px solid #999 !important;
+    padding: 0.5rem !important;
+  }
+  .mermaid-block svg {
+    width: 100% !important;
+    height: auto !important;
+  }
+
+  /* Code blocks: wrap, don't overflow page */
+  .message.assistant .body pre {
+    page-break-inside: avoid;
+    background: #f5f5f5 !important;
+    border: 1px solid #ccc !important;
+    color: black !important;
+  }
+  .message.assistant .body pre code {
+    white-space: pre-wrap !important;
+    word-wrap: break-word !important;
+  }
+  .message.assistant .body code {
+    background: #f5f5f5 !important;
+    border: 1px solid #ddd !important;
+  }
+
+  /* Tables */
+  .message.assistant .body table {
+    page-break-inside: avoid;
+  }
+  .message.assistant .body th {
+    background: #f0f0f0 !important;
+  }
+
+  /* Show URLs after links so they're useful in print */
+  .message.assistant .body a[href]:after {
+    content: ' (' attr(href) ')';
+    font-size: 0.85em;
+    color: #555;
+  }
+  .message.assistant .body a[href^='#']:after,
+  .message.assistant .body a[href^='/']:after {
+    content: '';
+  }
+
+  /* Page setup */
+  @page {
+    size: letter;
+    margin: 0.75in;
+  }
+}
+
 @media (max-width: 640px) {
   body { padding: 0 1rem; }
   .welcome h1 { font-size: 1.5rem; }
