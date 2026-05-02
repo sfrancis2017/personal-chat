@@ -8,7 +8,7 @@ mermaid.initialize({
   theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'default',
   securityLevel: 'strict',
   fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
-  flowchart: { htmlLabels: true, curve: 'basis' },
+  flowchart: { htmlLabels: false, curve: 'basis' },
 });
 
 // Worker endpoint. Override via ?api=https://your-worker.dev for local testing.
@@ -166,8 +166,14 @@ function buildDiagramActions(wrap, source) {
   dlBtn.addEventListener('click', () => {
     const svgEl = wrap.querySelector('svg');
     if (!svgEl) return;
-    const xml = new XMLSerializer().serializeToString(svgEl);
-    const blob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
+    // Clone so we can normalize without mutating the visible diagram
+    const clone = svgEl.cloneNode(true);
+    if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    if (!clone.getAttribute('xmlns:xlink'))
+      clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+    const xml = new XMLSerializer().serializeToString(clone);
+    const doc = `<?xml version="1.0" encoding="UTF-8"?>\n${xml}`;
+    const blob = new Blob([doc], { type: 'image/svg+xml;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -233,7 +239,7 @@ themeToggle.addEventListener('click', () => {
     theme: next === 'dark' ? 'dark' : 'default',
     securityLevel: 'strict',
     fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
-    flowchart: { htmlLabels: true, curve: 'basis' },
+    flowchart: { htmlLabels: false, curve: 'basis' },
   });
 });
 
