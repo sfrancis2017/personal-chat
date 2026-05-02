@@ -296,7 +296,16 @@ a:hover { text-decoration: underline; }
   z-index: 19;
 }
 
-.sidebar-toggle { display: none; }
+/* Toggle button visible on all viewports; behavior differs by width. */
+.sidebar-toggle { display: inline-flex; }
+
+/* Desktop collapse: grid drops the sidebar column, sidebar hides. */
+body.sidebar-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+body.sidebar-collapsed .sidebar {
+  display: none;
+}
 
 @media (max-width: 800px) {
   .sidebar {
@@ -313,7 +322,8 @@ a:hover { text-decoration: underline; }
     transition: transform 200ms ease;
   }
   .sidebar.open { transform: translateX(0); }
-  .sidebar-toggle { display: inline-flex; }
+  /* On mobile we use the drawer pattern, so ignore the desktop collapsed state. */
+  body.sidebar-collapsed .sidebar { display: flex; }
 }
 
 /* Header */
@@ -531,14 +541,15 @@ a:hover { text-decoration: underline; }
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  overflow: auto;
+  overflow-x: auto;
   text-align: center;
 }
 /* Override mermaid's inline max-width (sets a fixed pixel value that bursts narrow
-   columns). Don't force width:100% — let SVG keep its natural size up to the cap so
-   the height-auto computation doesn't crop bottom-edge nodes. */
+   columns). Min-width keeps labels readable at ≥640px viewports; below that, the
+   diagram shrinks fully so mobile users aren't forced into awkward horizontal scroll. */
 .mermaid-block svg {
   max-width: 100% !important;
+  min-width: min(640px, 100%);
   height: auto;
   display: block;
   margin: 0 auto;
