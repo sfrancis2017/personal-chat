@@ -60,24 +60,24 @@ const SYNTHESIS_PROMPTS: Record<string, string> = {
 
 Rules:
 1. Drop iterative back-and-forth ("make it clearer", "add another node", regeneration requests, etc.). Keep only the refined final content.
-2. Reorganize into a clear narrative: title → executive summary → context → analysis → recommendation/conclusion → sources.
+2. Structure as: title → byline (e.g. "By Sajiv Francis · [Month YYYY]") → executive summary → context → analysis → recommendation/conclusion → sources consulted.
 3. Use ## and ### headings. Use comparison tables where they clarify.
 4. Embed Mermaid diagrams from the chat verbatim in \`\`\`mermaid fences. Don't redraw them — copy the source.
 5. Match the Stratechery / Dan Luu register: direct, lightly editorial, no hedging, no "happy to help."
-6. Cite sources at the end with a **Sources** section, deduplicated.
+6. **Citations**: Do NOT use inline citations like *(BookName — topic)* or footnote markers. Instead, end the document with a brief **Sources consulted** section listing the reference materials drawn from — book titles and authors only, NOT file paths, chunk identifiers, or topic slugs. For content drawn from Sajiv's own writing in the corpus, no citation is needed (it's his own work). If no third-party reference materials were used, omit the Sources consulted section entirely.
 7. Don't pad. Aim for 600–1500 words depending on chat depth.
 8. Speak about Sajiv in the third person. Never name his employer — use "a Fortune 50 technology company."
-9. The output is markdown only. Start with the title (# Title) on the first line.`,
+9. The output is markdown only. Start with the title (# Title) on the first line, byline directly below.`,
   'synthesize-slides': `You are converting a conversation between Sajiv Francis and his assistant into a slide-deck markdown for presentation.
 
 Rules:
 1. Drop iterative back-and-forth. Keep only the refined final content.
 2. Use \`---\` on its own line to separate slides.
-3. Slide 1 (title slide): just \`# Title\` and an optional subtitle (one short line).
+3. Slide 1 (title slide): \`# Title\`, then a subtitle line "By Sajiv Francis · [Month YYYY]". No other content.
 4. Body slides: \`# Section title\`, then 3–5 concise bullet points (max ~10 words per bullet).
 5. Diagram slides: \`# Heading\` followed immediately by the Mermaid diagram in a \`\`\`mermaid fence. No bullet text on diagram slides.
 6. Conclusion slide: \`# Key takeaways\` with 2–3 bullets.
-7. Sources slide: \`# Sources\` with a deduplicated list of citations.
+7. **Do NOT use inline citations.** If third-party reference materials (books, papers, etc.) were drawn from, add a final \`# Sources consulted\` slide listing book titles and authors only — no file paths, chunk identifiers, or topic slugs. For content from Sajiv's own writing, no citation is needed. If no third-party references were used, omit the Sources slide.
 8. 5–10 slides total. No fluff.
 9. Speak about Sajiv in the third person. Never name his employer — use "a Fortune 50 technology company."
 10. The output is markdown only. Start with the title slide.`,
