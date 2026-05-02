@@ -232,10 +232,19 @@ async function streamFromAnthropic(
 ): Promise<Response> {
   let systemWithContext: string;
 
+  let outboundMessages = messages;
   if (mode && mode !== 'chat' && SYNTHESIS_PROMPTS[mode]) {
     // Synthesis mode: ignore RAG context, use the dedicated prompt.
     // The conversation history IS the source for synthesis.
     systemWithContext = SYNTHESIS_PROMPTS[mode];
+    // Anthropic requires messages to end with a user role. Append a
+    // synthesis trigger so the conversation history ending in an assistant
+    // message becomes valid for the next turn.
+    const trigger =
+      mode === 'synthesize-slides'
+        ? 'Now synthesize the conversation above into the slide deck markdown per your instructions. Output markdown only — no preamble.'
+        : 'Now synthesize the conversation above into the whitepaper markdown per your instructions. Output markdown only — no preamble.';
+    outboundMessages = [...messages, { role: 'user' as const, content: trigger }];
   } else {
     const contextBlock = context
       .map((c) => `<chunk source="${c.source}">\n${c.text}\n</chunk>`)
@@ -257,7 +266,7 @@ async function streamFromAnthropic(
        // can be 1-2k tokens, and we want headroom for 2-3 diagrams). Chat rarely exceeds 4k.
       max_tokens: mode && mode !== 'chat' ? 16384 : 4096,
       system: systemWithContext,
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      messages: outboundMessages.map((m) => ({ role: m.role, content: m.content })),
       stream: true,
     }),
   });
