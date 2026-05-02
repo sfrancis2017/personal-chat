@@ -585,12 +585,14 @@ body.sidebar-collapsed .sidebar {
 }
 
 /* Mermaid — preview fits the chat column. Use the Expand button (full-viewport
-   modal) for detailed inspection of large diagrams. */
+   modal) for detailed inspection of large diagrams.
+   Diagrams are always rendered on a white canvas regardless of page theme so
+   they look like clean exportable artifacts. */
 .mermaid-block {
   margin: 0.875rem 0;
   padding: 0.75rem 0.75rem 1.25rem;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-border);
+  background: #ffffff;
+  border: 1px solid #d0d0d0;
   border-radius: var(--radius-md);
   width: 100%;
   max-width: 100%;

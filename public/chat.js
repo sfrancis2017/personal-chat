@@ -11,9 +11,12 @@ async function getPptxgen() {
 }
 
 marked.setOptions({ gfm: true, breaks: false });
+// Mermaid is always rendered with the light ('default') theme — diagrams are
+// expected to be exported / shared as standalone artifacts where light is the
+// default, and they read well against a dark page backdrop too.
 mermaid.initialize({
   startOnLoad: false,
-  theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'default',
+  theme: 'default',
   securityLevel: 'loose',
   fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
   flowchart: { htmlLabels: true, curve: 'basis', useMaxWidth: true },
@@ -717,18 +720,7 @@ themeToggle.addEventListener('click', () => {
   const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
   document.documentElement.dataset.theme = next;
   localStorage.setItem('theme', next);
-  // Re-init mermaid with the new theme; existing diagrams stay as-is until next render.
-  mermaid.initialize({
-    startOnLoad: false,
-    theme: next === 'dark' ? 'dark' : 'default',
-    securityLevel: 'loose',
-    fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
-    flowchart: { htmlLabels: true, curve: 'basis', useMaxWidth: true },
-  themeVariables: {
-    fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
-    fontSize: '14px',
-  },
-  });
+  // Mermaid stays on the light theme regardless of page theme — no re-init needed.
 });
 
 composer.addEventListener('submit', async (e) => {
