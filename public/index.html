@@ -158,6 +158,11 @@
         <button type="button" class="preview-close" id="preview-close" aria-label="Close preview">×</button>
       </header>
       <div class="preview-body">
+        <!-- Centered print header — shown only when printing the preview -->
+        <div class="preview-print-header" id="preview-print-header" aria-hidden="true">
+          <h1 class="pph-title" id="pph-title"></h1>
+          <p class="pph-meta" id="pph-meta"></p>
+        </div>
         <div class="preview-content" id="preview-content"></div>
         <textarea class="preview-edit" id="preview-edit" hidden aria-label="Edit synthesized markdown"></textarea>
       </div>
@@ -168,6 +173,7 @@
           <button type="button" class="preview-action" id="preview-edit-toggle" disabled>Edit markdown</button>
           <button type="button" class="preview-action preview-action-primary" id="preview-save-pdf" disabled>Save as PDF</button>
           <button type="button" class="preview-action preview-action-primary" id="preview-save-ppt" disabled>Save as PPT</button>
+          <button type="button" class="preview-action" id="preview-email" disabled title="Compose email with subject + body pre-filled (attach the saved file manually)">Email…</button>
         </div>
       </footer>
     </div>

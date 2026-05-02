@@ -892,9 +892,14 @@ function exportRawPdf() {
     });
   }
   if (printHeaderEl) printHeaderEl.hidden = false;
+  // Set document.title so browser uses it as the default PDF filename
+  const prevTitle = document.title;
+  const fname = buildExportFilename('raw-pdf', 'pdf').replace(/\.pdf$/, '');
+  document.title = fname;
   setTimeout(() => {
     window.print();
     if (printHeaderEl) printHeaderEl.hidden = true;
+    document.title = prevTitle;
   }, 50);
 }
 
@@ -911,19 +916,52 @@ const previewRegenBtn = document.getElementById('preview-regenerate');
 const previewEditToggleBtn = document.getElementById('preview-edit-toggle');
 const previewSavePdfBtn = document.getElementById('preview-save-pdf');
 const previewSavePptBtn = document.getElementById('preview-save-ppt');
+const previewEmailBtn = document.getElementById('preview-email');
+const previewPrintHeaderEl = document.getElementById('preview-print-header');
+const pphTitleEl = document.getElementById('pph-title');
+const pphMetaEl = document.getElementById('pph-meta');
 
 let previewMarkdown = '';
 let previewMode = null; // 'synthesize-whitepaper' | 'synthesize-slides'
 let previewEditing = false;
 
 function setPreviewActionsEnabled(enabled) {
-  [previewRegenBtn, previewEditToggleBtn, previewSavePdfBtn, previewSavePptBtn].forEach((b) => {
+  [previewRegenBtn, previewEditToggleBtn, previewSavePdfBtn, previewSavePptBtn, previewEmailBtn].forEach((b) => {
     if (b) b.disabled = !enabled;
   });
   // PPT only makes sense for slides mode
   if (previewSavePptBtn) {
     previewSavePptBtn.disabled = !enabled || previewMode !== 'synthesize-slides';
   }
+}
+
+// Build a clean, predictable filename: "Sajiv-Francis-Whitepaper-Title-2026-05-02.pdf"
+function buildExportFilename(kind, ext) {
+  const chat = getActiveChat();
+  const title = (chat?.title ?? 'Chat')
+    .replace(/[^A-Za-z0-9 -]/g, '')
+    .replace(/\s+/g, '-')
+    .slice(0, 60);
+  const date = new Date().toISOString().slice(0, 10);
+  const labels = {
+    'raw-pdf': 'Chat',
+    'synthesize-whitepaper': 'Whitepaper',
+    'synthesize-slides': 'Slides',
+  };
+  const label = labels[kind] ?? 'Export';
+  return `Sajiv-Francis-${label}-${title || 'Chat'}-${date}.${ext}`;
+}
+
+function exportEmailSubject() {
+  const chat = getActiveChat();
+  const t = chat?.title ?? 'Chat';
+  if (previewMode === 'synthesize-whitepaper') return `Whitepaper: ${t}`;
+  if (previewMode === 'synthesize-slides') return `Slide deck: ${t}`;
+  return `Chat: ${t}`;
+}
+
+function exportEmailBody(filename) {
+  return `Hi,\n\nFind the attached export from chat.sajivfrancis.com.\n\nFile: ${filename}\n\n— Sent via Sajiv's personal chat`;
 }
 
 function openPreview(mode) {
@@ -1070,11 +1108,23 @@ if (previewEditToggleBtn) {
 if (previewSavePdfBtn) {
   previewSavePdfBtn.addEventListener('click', () => {
     if (!previewMarkdown) return;
+    // Populate the centered print header with title + meta
+    const fname = buildExportFilename(previewMode, 'pdf').replace(/\.pdf$/, '');
+    if (pphTitleEl) pphTitleEl.textContent = fname;
+    if (pphMetaEl) {
+      const date = new Date().toLocaleDateString(undefined, {
+        year: 'numeric', month: 'long', day: 'numeric',
+      });
+      pphMetaEl.textContent = `Sajiv Francis · ${date} · chat.sajivfrancis.com`;
+    }
+    // Set document.title so browser's "Save as PDF" defaults to our filename
+    const prevTitle = document.title;
+    document.title = fname;
     document.body.classList.add('printing-preview');
     setTimeout(() => {
       window.print();
-      // Removed after print dialog (blocking call returns when dismissed)
       document.body.classList.remove('printing-preview');
+      document.title = prevTitle;
     }, 50);
   });
 }
@@ -1226,8 +1276,7 @@ async function savePreviewAsPpt() {
       }
     }
 
-    const chat = getActiveChat();
-    const fname = `${(chat?.title ?? 'Chat').replace(/[^A-Za-z0-9-_ ]/g, '_').slice(0, 60)}.pptx`;
+    const fname = buildExportFilename(previewMode, 'pptx');
     await pres.writeFile({ fileName: fname });
     previewStatus.textContent = `Saved ${fname}.`;
   } catch (e) {
@@ -1240,6 +1289,19 @@ async function savePreviewAsPpt() {
 
 if (previewSavePptBtn) {
   previewSavePptBtn.addEventListener('click', savePreviewAsPpt);
+}
+
+if (previewEmailBtn) {
+  previewEmailBtn.addEventListener('click', () => {
+    if (!previewMarkdown) return;
+    // Pick filename based on mode for the email body hint
+    const ext = previewMode === 'synthesize-slides' ? 'pptx' : 'pdf';
+    const fname = buildExportFilename(previewMode, ext);
+    const subject = encodeURIComponent(exportEmailSubject());
+    const body = encodeURIComponent(exportEmailBody(fname));
+    // mailto can't auto-attach; user attaches the downloaded file manually.
+    window.location.href = `mailto:?subject=${subject}&body=${body}`;
+  });
 }
 
 function toggleExportMenu(open) {
