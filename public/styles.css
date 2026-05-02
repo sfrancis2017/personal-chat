@@ -434,6 +434,7 @@ body.sidebar-collapsed .sidebar {
 .message .body {
   white-space: pre-wrap;
   word-wrap: break-word;
+  min-width: 0;
 }
 
 .message.assistant .body {
@@ -545,11 +546,10 @@ body.sidebar-collapsed .sidebar {
   text-align: center;
 }
 /* Override mermaid's inline max-width (sets a fixed pixel value that bursts narrow
-   columns). Min-width keeps labels readable at ≥640px viewports; below that, the
-   diagram shrinks fully so mobile users aren't forced into awkward horizontal scroll. */
+   columns). Force width:100% so the SVG always tracks parent on resize. */
 .mermaid-block svg {
   max-width: 100% !important;
-  min-width: min(640px, 100%);
+  width: 100% !important;
   height: auto;
   display: block;
   margin: 0 auto;
