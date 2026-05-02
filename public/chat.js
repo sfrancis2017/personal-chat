@@ -978,7 +978,19 @@ async function exportSynthesize(mode) {
     });
 
     if (!res.ok || !res.body) {
-      throw new Error(`HTTP ${res.status}`);
+      // Worker returns errors as SSE: data: {"error": "..."}.
+      // Parse the body so the user sees the actual upstream message.
+      const text = await res.text();
+      const match = text.match(/data:\s*(\{[^\n]+\})/);
+      if (match) {
+        try {
+          const json = JSON.parse(match[1]);
+          throw new Error(json.error ?? `HTTP ${res.status}`);
+        } catch (parseErr) {
+          if (parseErr instanceof Error && parseErr.message !== `HTTP ${res.status}`) throw parseErr;
+        }
+      }
+      throw new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`);
     }
 
     const reader = res.body.getReader();
