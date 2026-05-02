@@ -111,6 +111,11 @@ Format:
 - For complex analytical questions (architecture decisions, comparisons, design tradeoffs), structure as: short summary → context → analysis → recommendation. Keep simple factual answ.                                                                                                                                                                                   
 - For process flows, system architectures, or component relationships, emit a Mermaid diagram in a \`\`\`mermaid fence — the chat renders it inline.
 - For Mermaid node labels with multiple lines, use \`<br>\` not \`\\n\` (e.g. \`["SAP ECC<br>(FI/CO Documents)"]\`).
+- Mermaid edge labels with special characters (parens, slashes, ampersands, brackets, colons) MUST be wrapped in double quotes inside the pipes. Examples:
+  GOOD: \`A -->|"Integration Layer<br>(CPI / SDI)"| B\`
+  BAD:  \`A -->|Integration Layer<br>(CPI / SDI)| B\` (parser fails on the open paren)
+  GOOD: \`A -->|"reads from S/4HANA"| B\`
+  BAD:  \`A -->|reads from S/4HANA| B\` (slash can break parsing)
 - Subgraph identifiers must NOT share names with any node ID, even nodes inside that subgraph. Use distinct IDs — e.g. \`subgraph ML_LAYER ... ML[Machine Learning] end\`, not \`subgraph ML ... ML[Machine Learning] end\` (mermaid will reject the latter as a parent-of-itself cycle).
 - Define every \`classDef\` AND every \`class NodeId className\` assignment at the very top of the diagram, before edges. (Trailing class statements break rendering if the response is truncated.)
 - Color Mermaid nodes with \`classDef\` (define at top, apply via \`class NodeId className\`) using these conventions:
@@ -223,6 +228,37 @@ function corsHeaders(origin: string | null, env: Env): HeadersInit {
 
 // ---- Anthropic streaming proxy --------------------------------------------
 
+// Block-shaped system prompt entry used by Anthropic's prompt caching.
+type SystemBlock = { type: 'text'; text: string; cache_control?: { type: 'ephemeral' } };
+
+async function callAnthropicWithRetry(
+  body: string,
+  env: Env,
+  maxRetries = 3
+): Promise<Response> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        'x-api-key': env.ANTHROPIC_API_KEY,
+      },
+      body,
+    });
+    // Retry on rate limits (429) and overload (529) with exponential backoff.
+    // Both are transient; other 4xx are permanent and should surface immediately.
+    if ((res.status === 429 || res.status === 529) && attempt < maxRetries) {
+      const delay = 1000 * Math.pow(2, attempt); // 1s, 2s, 4s
+      await new Promise((r) => setTimeout(r, delay));
+      continue;
+    }
+    return res;
+  }
+  // Unreachable, but TypeScript needs a return path.
+  throw new Error('callAnthropicWithRetry: exhausted retries');
+}
+
 async function streamFromAnthropic(
   messages: ChatMessage[],
   context: Chunk[],
@@ -230,13 +266,19 @@ async function streamFromAnthropic(
   mode: ChatRequest['mode'],
   env: Env
 ): Promise<Response> {
-  let systemWithContext: string;
-
+  // Build the system prompt as cacheable blocks. Anthropic's prompt caching
+  // (ephemeral, 5-minute TTL) gives ~90% discount on cached input tokens.
+  // Order: stable parts first (cached), variable parts last (not cached).
+  const systemBlocks: SystemBlock[] = [];
   let outboundMessages = messages;
+
   if (mode && mode !== 'chat' && SYNTHESIS_PROMPTS[mode]) {
-    // Synthesis mode: ignore RAG context, use the dedicated prompt.
-    // The conversation history IS the source for synthesis.
-    systemWithContext = SYNTHESIS_PROMPTS[mode];
+    // Synthesis: only the synthesis prompt — stable per mode, cache it.
+    systemBlocks.push({
+      type: 'text',
+      text: SYNTHESIS_PROMPTS[mode],
+      cache_control: { type: 'ephemeral' },
+    });
     // Anthropic requires messages to end with a user role. Append a
     // synthesis trigger so the conversation history ending in an assistant
     // message becomes valid for the next turn.
@@ -246,30 +288,35 @@ async function streamFromAnthropic(
         : 'Now synthesize the conversation above into the whitepaper markdown per your instructions. Output markdown only — no preamble.';
     outboundMessages = [...messages, { role: 'user' as const, content: trigger }];
   } else {
+    // Chat: cache the base system prompt + (if present) the skill overlay.
+    // The RAG context block is volatile per query — keep uncached at the end.
+    const stable = skill && SKILLS[skill]
+      ? `${SYSTEM_PROMPT}\n\n${SKILLS[skill]}`
+      : SYSTEM_PROMPT;
+    systemBlocks.push({
+      type: 'text',
+      text: stable,
+      cache_control: { type: 'ephemeral' },
+    });
     const contextBlock = context
       .map((c) => `<chunk source="${c.source}">\n${c.text}\n</chunk>`)
       .join('\n\n');
-    const skillOverlay = skill && SKILLS[skill] ? `\n\n${SKILLS[skill]}` : '';
-    systemWithContext = `${SYSTEM_PROMPT}${skillOverlay}\n\n<context>\n${contextBlock}\n</context>`;
+    if (contextBlock) {
+      systemBlocks.push({ type: 'text', text: `<context>\n${contextBlock}\n</context>` });
+    }
   }
 
-  const upstream = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'anthropic-version': '2023-06-01',
-      'x-api-key': env.ANTHROPIC_API_KEY,
-    },
-    body: JSON.stringify({
-      model: env.ANTHROPIC_MODEL,
-      // Synthesis can produce long whitepapers / multi-slide decks (each diagram alone
-       // can be 1-2k tokens, and we want headroom for 2-3 diagrams). Chat rarely exceeds 4k.
-      max_tokens: mode && mode !== 'chat' ? 16384 : 4096,
-      system: systemWithContext,
-      messages: outboundMessages.map((m) => ({ role: m.role, content: m.content })),
-      stream: true,
-    }),
+  const requestBody = JSON.stringify({
+    model: env.ANTHROPIC_MODEL,
+    // Synthesis can produce long whitepapers / multi-slide decks (each diagram alone
+    // can be 1-2k tokens, and we want headroom for 2-3 diagrams). Chat rarely exceeds 4k.
+    max_tokens: mode && mode !== 'chat' ? 16384 : 4096,
+    system: systemBlocks,
+    messages: outboundMessages.map((m) => ({ role: m.role, content: m.content })),
+    stream: true,
   });
+
+  const upstream = await callAnthropicWithRetry(requestBody, env);
 
   if (!upstream.ok || !upstream.body) {
     const errText = await upstream.text();
