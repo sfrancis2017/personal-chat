@@ -459,6 +459,15 @@ function buildDiagramActions(wrap, source) {
   const actions = document.createElement('div');
   actions.className = 'mermaid-actions';
 
+  const expandBtn = document.createElement('button');
+  expandBtn.type = 'button';
+  expandBtn.className = 'mermaid-action';
+  expandBtn.textContent = 'Expand';
+  expandBtn.addEventListener('click', () => {
+    const svg = wrap.querySelector('svg');
+    if (svg) openDiagramModal(svg);
+  });
+
   const copyBtn = document.createElement('button');
   copyBtn.type = 'button';
   copyBtn.className = 'mermaid-action';
@@ -498,8 +507,41 @@ function buildDiagramActions(wrap, source) {
     URL.revokeObjectURL(url);
   });
 
-  actions.append(copyBtn, dlBtn);
+  actions.append(expandBtn, copyBtn, dlBtn);
   return actions;
+}
+
+const diagramModal = document.getElementById('diagram-modal');
+const diagramModalContent = document.getElementById('diagram-modal-content');
+const diagramModalClose = document.getElementById('diagram-modal-close');
+
+function openDiagramModal(svg) {
+  if (!diagramModal || !diagramModalContent) return;
+  // Clone so we don't detach the in-page SVG
+  const clone = svg.cloneNode(true);
+  // Strip any constraining inline styles so the clone renders at natural size
+  clone.removeAttribute('style');
+  clone.style.maxWidth = 'none';
+  diagramModalContent.replaceChildren(clone);
+  diagramModal.hidden = false;
+  document.body.style.overflow = 'hidden';
+}
+
+function closeDiagramModal() {
+  if (!diagramModal) return;
+  diagramModal.hidden = true;
+  diagramModalContent.replaceChildren();
+  document.body.style.overflow = '';
+}
+
+if (diagramModal) {
+  diagramModalClose?.addEventListener('click', closeDiagramModal);
+  diagramModal.addEventListener('click', (e) => {
+    if (e.target === diagramModal) closeDiagramModal();
+  });
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !diagramModal.hidden) closeDiagramModal();
+  });
 }
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
