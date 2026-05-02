@@ -304,7 +304,10 @@ a:hover { text-decoration: underline; }
     top: 0;
     left: 0;
     width: 280px;
+    /* 100dvh = dynamic viewport height (excludes mobile browser chrome).
+       Falls back to 100vh in older browsers. */
     height: 100vh;
+    height: 100dvh;
     z-index: 20;
     transform: translateX(-100%);
     transition: transform 200ms ease;
@@ -524,20 +527,22 @@ a:hover { text-decoration: underline; }
 /* Mermaid */
 .mermaid-block {
   margin: 0.875rem 0;
-  padding: 0.75rem;
+  padding: 0.75rem 0.75rem 1.25rem;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  overflow-x: auto;
+  overflow: auto;
   text-align: center;
 }
-/* Override mermaid's inline max-width (it sets a fixed pixel value that bursts narrow columns) */
+/* Override mermaid's inline max-width (sets a fixed pixel value that bursts narrow
+   columns). Don't force width:100% — let SVG keep its natural size up to the cap so
+   the height-auto computation doesn't crop bottom-edge nodes. */
 .mermaid-block svg {
   max-width: 100% !important;
-  width: 100%;
   height: auto;
   display: block;
   margin: 0 auto;
+  overflow: visible;
 }
 .mermaid-error { text-align: left; }
 .mermaid-error-note {
