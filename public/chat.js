@@ -8,7 +8,7 @@ mermaid.initialize({
   theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'default',
   securityLevel: 'strict',
   fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
-  flowchart: { htmlLabels: false, curve: 'basis' },
+  flowchart: { htmlLabels: true, curve: 'basis' },
 });
 
 // Worker endpoint. Override via ?api=https://your-worker.dev for local testing.
@@ -166,11 +166,11 @@ function buildDiagramActions(wrap, source) {
   dlBtn.addEventListener('click', () => {
     const svgEl = wrap.querySelector('svg');
     if (!svgEl) return;
-    // Clone so we can normalize without mutating the visible diagram
     const clone = svgEl.cloneNode(true);
     if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
     if (!clone.getAttribute('xmlns:xlink'))
       clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+    inlineForeignObjectsAsText(clone);
     const xml = new XMLSerializer().serializeToString(clone);
     const doc = `<?xml version="1.0" encoding="UTF-8"?>\n${xml}`;
     const blob = new Blob([doc], { type: 'image/svg+xml;charset=utf-8' });
@@ -186,6 +186,62 @@ function buildDiagramActions(wrap, source) {
 
   actions.append(copyBtn, dlBtn);
   return actions;
+}
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+// Convert mermaid's foreignObject-based labels to native <text> elements so the
+// downloaded SVG renders in viewers that don't process foreignObject (Illustrator,
+// draw.io, many SVG previewers).
+function inlineForeignObjectsAsText(svg) {
+  const fos = Array.from(svg.querySelectorAll('foreignObject'));
+  for (const fo of fos) {
+    const lines = [];
+    fo.querySelectorAll('div, p, span').forEach((el) => {
+      // Only leaf text-bearing nodes; skip wrappers
+      if (el.children.length > 0) return;
+      const t = (el.textContent ?? '').trim();
+      if (t) lines.push(t);
+    });
+    if (lines.length === 0) {
+      const t = (fo.textContent ?? '').trim();
+      if (t) lines.push(t);
+    }
+    if (lines.length === 0) {
+      fo.remove();
+      continue;
+    }
+
+    const x = parseFloat(fo.getAttribute('x') ?? '0') || 0;
+    const y = parseFloat(fo.getAttribute('y') ?? '0') || 0;
+    const w = parseFloat(fo.getAttribute('width') ?? '0') || 0;
+    const h = parseFloat(fo.getAttribute('height') ?? '0') || 0;
+
+    const text = document.createElementNS(SVG_NS, 'text');
+    text.setAttribute('text-anchor', 'middle');
+    text.setAttribute('dominant-baseline', 'middle');
+    text.setAttribute('font-family', 'Inter, ui-sans-serif, system-ui, sans-serif');
+    text.setAttribute('font-size', '13');
+    text.setAttribute('fill', 'currentColor');
+
+    const cx = x + w / 2;
+    const lineHeight = 16;
+    const startY = y + h / 2 - ((lines.length - 1) * lineHeight) / 2;
+    lines.forEach((line, i) => {
+      const ts = document.createElementNS(SVG_NS, 'tspan');
+      ts.setAttribute('x', String(cx));
+      ts.setAttribute('y', String(startY + i * lineHeight));
+      ts.textContent = line;
+      text.appendChild(ts);
+    });
+
+    fo.replaceWith(text);
+  }
+
+  // Inject a default text color so currentColor resolves in standalone viewers
+  const style = document.createElementNS(SVG_NS, 'style');
+  style.textContent = 'svg { color: #1a1a1a; }';
+  svg.insertBefore(style, svg.firstChild);
 }
 
 function escapeHtml(s) {
@@ -239,7 +295,7 @@ themeToggle.addEventListener('click', () => {
     theme: next === 'dark' ? 'dark' : 'default',
     securityLevel: 'strict',
     fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
-    flowchart: { htmlLabels: false, curve: 'basis' },
+    flowchart: { htmlLabels: true, curve: 'basis' },
   });
 });
 
