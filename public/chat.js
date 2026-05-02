@@ -58,6 +58,17 @@ const sidebarList = document.getElementById('sidebar-list');
 const sidebarToggle = document.getElementById('sidebar-toggle');
 const sidebarBackdrop = document.getElementById('sidebar-backdrop');
 const newChatBtn = document.getElementById('new-chat');
+const promptsList = document.getElementById('sidebar-prompts-list');
+const skillSelect = document.getElementById('skill-select');
+
+// Quick prompts — small set tuned for EA / software engineering use of the corpus.
+const QUICK_PROMPTS = [
+  'Generate a Mermaid diagram for [topic] using ArchiMate colors, grounded in my notes.',
+  'Compare [A] vs [B] from my published work as a table — strengths, tradeoffs, when to use which.',
+  'What have I written about [topic]? Summarize the through-line in 3 bullets.',
+  'Turn the SAP Press / BPMN content on [topic] into a process flow diagram.',
+  'Draft a whitepaper intro section on [topic], citing the relevant chunks from my corpus.',
+];
 
 // ---- Chat history storage ------------------------------------------------
 // Each chat: {id, title, createdAt, updatedAt, messages: [{role,content}], topics: [string]}
@@ -277,7 +288,10 @@ function setActiveChat(id) {
   activeChatId = id;
   selectedTopics.clear();
   const chat = getActiveChat();
-  if (chat) for (const t of chat.topics) selectedTopics.add(t);
+  if (chat) {
+    for (const t of chat.topics) selectedTopics.add(t);
+    if (skillSelect) skillSelect.value = chat.skill ?? '';
+  }
   refreshChipPressedState();
   renderConversation();
   renderSidebar();
@@ -317,6 +331,33 @@ async function renderConversation() {
     } else {
       body.textContent = m.content;
     }
+  }
+}
+
+function renderQuickPrompts() {
+  if (!promptsList) return;
+  promptsList.replaceChildren();
+  for (const text of QUICK_PROMPTS) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'sidebar-prompt';
+    btn.textContent = text;
+    btn.addEventListener('click', () => {
+      input.value = text;
+      autosize();
+      // Place cursor at first [placeholder] for quick edit
+      const m = text.match(/\[([^\]]+)\]/);
+      if (m) {
+        const start = text.indexOf(m[0]);
+        const end = start + m[0].length;
+        input.focus();
+        input.setSelectionRange(start, end);
+      } else {
+        input.focus();
+      }
+      closeMobileSidebar();
+    });
+    promptsList.appendChild(btn);
   }
 }
 
@@ -363,6 +404,29 @@ async function renderMarkdown(container, source) {
     }
     code.parentElement.replaceWith(wrap);
   }
+
+  // Add a Copy button to every remaining code block (non-mermaid)
+  container.querySelectorAll('pre').forEach((pre) => {
+    if (pre.querySelector('.code-copy')) return;
+    const code = pre.querySelector('code');
+    if (!code) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'code-copy';
+    btn.textContent = 'Copy';
+    btn.setAttribute('aria-label', 'Copy code');
+    btn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(code.textContent ?? '');
+        btn.textContent = 'Copied';
+      } catch {
+        btn.textContent = 'Failed';
+      }
+      setTimeout(() => (btn.textContent = 'Copy'), 1500);
+    });
+    pre.appendChild(btn);
+  });
+
   scrollToBottom();
 }
 
@@ -572,6 +636,7 @@ composer.addEventListener('submit', async (e) => {
       body: JSON.stringify({
         messages: chat.messages,
         topics: [...selectedTopics],
+        skill: chat.skill ?? '',
       }),
     });
 
@@ -664,6 +729,15 @@ newChatBtn.addEventListener('click', () => {
   input.focus();
 });
 
+if (skillSelect) {
+  skillSelect.addEventListener('change', () => {
+    const chat = getActiveChat();
+    if (!chat) return;
+    chat.skill = skillSelect.value || undefined;
+    saveChats();
+  });
+}
+
 sidebarToggle.addEventListener('click', () => {
   if (sidebar.classList.contains('open')) closeMobileSidebar();
   else openMobileSidebar();
@@ -683,6 +757,7 @@ window.addEventListener('keydown', (e) => {
     activeChatId = chats.some((c) => c.id === storedActive) ? storedActive : chats[0].id;
   }
   renderSidebar();
+  renderQuickPrompts();
   // setActiveChat re-renders the conversation and applies any saved topics
   setActiveChat(activeChatId);
   loadTopics();

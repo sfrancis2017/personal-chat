@@ -42,7 +42,23 @@ interface ChatMessage {
 interface ChatRequest {
   messages: ChatMessage[];
   topics?: string[];
+  skill?: string;
 }
+
+// Skill modes — server-side overlays appended to the system prompt.
+// Keep the set small and high-signal for EA / software engineering use.
+const SKILLS: Record<string, string> = {
+  'architecture-review': `Mode: Architecture Review. Critique the design end-to-end. Structure every response as:
+1. Assumptions you're surfacing (what the user implicitly assumed)
+2. Tradeoffs (with explicit pros/cons)
+3. Risks and failure modes
+4. Recommendation (clear, justified)
+Cite source chunks for every factual claim. Don't be agreeable for its own sake.`,
+  'diagram-first': `Mode: Diagram First. Lead with a Mermaid diagram before any prose. Pick the classDef palette that matches the domain (data-pipeline / ArchiMate / Azure). Keep prose to 2–4 short paragraphs after the diagram. No fluff.`,
+  'whitepaper': `Mode: Whitepaper. Produce long-form, publishable output. Use ## / ### headings, comparison tables where useful, embedded diagrams. Stratechery / Dan Luu register — direct, lightly editorial, no hedging. End with a clear thesis and a Sources block.`,
+  'supporting-review': `Mode: Supporting Review. Build the case for the user's stated direction. Surface the strongest evidence in the retrieved chunks that supports it. Frame as: thesis → supporting evidence → counter-arguments and why they don't outweigh → why this is the right call. Use this for stakeholder buy-in or board justification.`,
+  'adversarial-review': `Mode: Adversarial Review. Argue against the user's framing. Surface what the retrieved context contradicts in their stated view, name failure modes they haven't acknowledged, and challenge their assumptions. Frame as: stated position → strongest objections → evidence from chunks that undermines it → what would have to be true for the user to be right. Be direct, not hostile.`,
+};
 
 const SYSTEM_PROMPT = `You are a personal assistant grounded in Sajiv Francis's published writing, architecture notes, talks, and cloud  materials. You speak about him in the third person.                             
                                      
@@ -171,13 +187,15 @@ function corsHeaders(origin: string | null, env: Env): HeadersInit {
 async function streamFromAnthropic(
   messages: ChatMessage[],
   context: Chunk[],
+  skill: string | undefined,
   env: Env
 ): Promise<Response> {
   const contextBlock = context
     .map((c) => `<chunk source="${c.source}">\n${c.text}\n</chunk>`)
     .join('\n\n');
 
-  const systemWithContext = `${SYSTEM_PROMPT}\n\n<context>\n${contextBlock}\n</context>`;
+  const skillOverlay = skill && SKILLS[skill] ? `\n\n${SKILLS[skill]}` : '';
+  const systemWithContext = `${SYSTEM_PROMPT}${skillOverlay}\n\n<context>\n${contextBlock}\n</context>`;
 
   const upstream = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -328,7 +346,7 @@ export default {
       const query = lastUser?.content ?? '';
       const context = await getContext(query, body.topics, env);
 
-      const streamResp = await streamFromAnthropic(body.messages, context, env);
+      const streamResp = await streamFromAnthropic(body.messages, context, body.skill, env);
       // Merge CORS into the streaming response
       const headers = new Headers(streamResp.headers);
       Object.entries(cors).forEach(([k, v]) => headers.set(k, v as string));

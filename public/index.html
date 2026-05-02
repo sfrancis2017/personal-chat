@@ -51,8 +51,23 @@
           </svg>
           New chat
         </button>
+        <label class="skill-select-wrap">
+          <span class="skill-select-label">Skill</span>
+          <select id="skill-select" class="skill-select" aria-label="Response style">
+            <option value="">Default</option>
+            <option value="architecture-review">Architecture Review</option>
+            <option value="diagram-first">Diagram First</option>
+            <option value="whitepaper">Whitepaper</option>
+            <option value="supporting-review">Supporting Review</option>
+            <option value="adversarial-review">Adversarial Review</option>
+          </select>
+        </label>
       </div>
       <div class="sidebar-list" id="sidebar-list" role="list"></div>
+      <details class="sidebar-prompts" id="sidebar-prompts">
+        <summary class="sidebar-prompts-summary">Quick prompts</summary>
+        <div class="sidebar-prompts-list" id="sidebar-prompts-list"></div>
+      </details>
       <div class="sidebar-foot">
         <span class="sidebar-foot-note">Stored on this device</span>
       </div>
