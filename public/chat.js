@@ -1,6 +1,14 @@
 import { marked } from 'https://esm.sh/marked@13.0.3';
 import DOMPurify from 'https://esm.sh/dompurify@3.1.7';
 import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.esm.min.mjs';
+// pptxgenjs lazy-loaded only when the user clicks Save as PPT (~150KB)
+let pptxgen = null;
+async function getPptxgen() {
+  if (pptxgen) return pptxgen;
+  const mod = await import('https://esm.sh/pptxgenjs@3.12.0');
+  pptxgen = mod.default ?? mod;
+  return pptxgen;
+}
 
 marked.setOptions({ gfm: true, breaks: false });
 mermaid.initialize({
@@ -60,7 +68,8 @@ const sidebarBackdrop = document.getElementById('sidebar-backdrop');
 const newChatBtn = document.getElementById('new-chat');
 const promptsList = document.getElementById('sidebar-prompts-list');
 const skillSelect = document.getElementById('skill-select');
-const exportPdfBtn = document.getElementById('export-pdf');
+const exportTriggerBtn = document.getElementById('export-trigger');
+const exportMenuEl = document.getElementById('export-menu');
 const printHeaderEl = document.getElementById('print-header');
 const printTitleEl = document.getElementById('print-title');
 const printDateEl = document.getElementById('print-date');
@@ -868,28 +877,387 @@ if (skillSelect) {
   });
 }
 
-if (exportPdfBtn) {
-  exportPdfBtn.addEventListener('click', () => {
-    const chat = getActiveChat();
-    if (!chat || chat.messages.length === 0) {
-      alert('Nothing to export — start a conversation first.');
-      return;
+function exportRawPdf() {
+  const chat = getActiveChat();
+  if (!chat || chat.messages.length === 0) {
+    alert('Nothing to export — start a conversation first.');
+    return;
+  }
+  if (printTitleEl) printTitleEl.textContent = chat.title || 'Chat';
+  if (printDateEl) {
+    printDateEl.textContent = new Date(chat.updatedAt).toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+  }
+  if (printHeaderEl) printHeaderEl.hidden = false;
+  setTimeout(() => {
+    window.print();
+    if (printHeaderEl) printHeaderEl.hidden = true;
+  }, 50);
+}
+
+// ---- Synthesis preview pane ----------------------------------------------
+
+const previewModal = document.getElementById('preview-modal');
+const previewTitle = document.getElementById('preview-title');
+const previewSubtitle = document.getElementById('preview-subtitle');
+const previewContent = document.getElementById('preview-content');
+const previewEdit = document.getElementById('preview-edit');
+const previewStatus = document.getElementById('preview-status');
+const previewCloseBtn = document.getElementById('preview-close');
+const previewRegenBtn = document.getElementById('preview-regenerate');
+const previewEditToggleBtn = document.getElementById('preview-edit-toggle');
+const previewSavePdfBtn = document.getElementById('preview-save-pdf');
+const previewSavePptBtn = document.getElementById('preview-save-ppt');
+
+let previewMarkdown = '';
+let previewMode = null; // 'synthesize-whitepaper' | 'synthesize-slides'
+let previewEditing = false;
+
+function setPreviewActionsEnabled(enabled) {
+  [previewRegenBtn, previewEditToggleBtn, previewSavePdfBtn, previewSavePptBtn].forEach((b) => {
+    if (b) b.disabled = !enabled;
+  });
+  // PPT only makes sense for slides mode
+  if (previewSavePptBtn) {
+    previewSavePptBtn.disabled = !enabled || previewMode !== 'synthesize-slides';
+  }
+}
+
+function openPreview(mode) {
+  previewMode = mode;
+  previewMarkdown = '';
+  previewEditing = false;
+  previewEdit.hidden = true;
+  previewEdit.value = '';
+  previewContent.hidden = false;
+  previewContent.replaceChildren();
+  previewModal.hidden = false;
+  // Mode class drives slides-vs-whitepaper print behavior (page breaks).
+  previewModal.classList.toggle('mode-slides', mode === 'synthesize-slides');
+  previewModal.classList.toggle('mode-whitepaper', mode === 'synthesize-whitepaper');
+  document.body.style.overflow = 'hidden';
+  previewTitle.textContent = mode === 'synthesize-slides' ? 'Slide deck preview' : 'Whitepaper preview';
+  previewSubtitle.textContent = '';
+  previewStatus.textContent = 'Synthesizing — this may take 10–30 seconds.';
+  setPreviewActionsEnabled(false);
+}
+
+function closePreview() {
+  previewModal.hidden = true;
+  document.body.style.overflow = '';
+  previewMode = null;
+  previewMarkdown = '';
+}
+
+async function exportSynthesize(mode) {
+  const chat = getActiveChat();
+  if (!chat || chat.messages.length === 0) {
+    alert('Nothing to synthesize — start a conversation first.');
+    return;
+  }
+
+  openPreview(mode);
+
+  try {
+    const token = getToken();
+    if (!token) throw new Error('Access token required.');
+
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        messages: chat.messages,
+        mode,
+      }),
+    });
+
+    if (!res.ok || !res.body) {
+      throw new Error(`HTTP ${res.status}`);
     }
-    if (printTitleEl) printTitleEl.textContent = chat.title || 'Chat';
-    if (printDateEl) {
-      printDateEl.textContent = new Date(chat.updatedAt).toLocaleDateString(undefined, {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-      });
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let received = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split('\n\n');
+      buffer = events.pop() ?? '';
+      for (const evt of events) {
+        const line = evt.split('\n').find((l) => l.startsWith('data: '));
+        if (!line) continue;
+        const payload = line.slice(6).trim();
+        if (payload === '[DONE]') continue;
+        try {
+          const json = JSON.parse(payload);
+          if (json.delta) {
+            received += json.delta;
+            // Show streaming text as plain (rendered properly on stream complete)
+            previewContent.textContent = received;
+          }
+          if (json.error) throw new Error(json.error);
+        } catch {
+          // skip malformed
+        }
+      }
     }
-    if (printHeaderEl) printHeaderEl.hidden = false;
-    // Slight delay so the DOM update lands before print dialog
+
+    previewMarkdown = received;
+    await renderMarkdown(previewContent, previewMarkdown);
+    previewStatus.textContent = `Done — ${received.split(/\s+/).length} words.`;
+    setPreviewActionsEnabled(true);
+  } catch (err) {
+    previewContent.textContent = `Synthesis failed: ${err?.message ?? err}`;
+    previewStatus.textContent = 'Error.';
+  }
+}
+
+if (previewCloseBtn) previewCloseBtn.addEventListener('click', closePreview);
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && previewModal && !previewModal.hidden) closePreview();
+});
+
+if (previewRegenBtn) {
+  previewRegenBtn.addEventListener('click', () => {
+    if (previewMode) exportSynthesize(previewMode);
+  });
+}
+
+if (previewEditToggleBtn) {
+  previewEditToggleBtn.addEventListener('click', async () => {
+    if (!previewEditing) {
+      // Switch to edit mode
+      previewEdit.value = previewMarkdown;
+      previewEdit.hidden = false;
+      previewContent.hidden = true;
+      previewEditToggleBtn.textContent = 'Update preview';
+      previewEditing = true;
+      previewEdit.focus();
+    } else {
+      // Apply edits and switch back to rendered preview
+      previewMarkdown = previewEdit.value;
+      previewEdit.hidden = true;
+      previewContent.hidden = false;
+      previewContent.replaceChildren();
+      await renderMarkdown(previewContent, previewMarkdown);
+      previewEditToggleBtn.textContent = 'Edit markdown';
+      previewEditing = false;
+    }
+  });
+}
+
+if (previewSavePdfBtn) {
+  previewSavePdfBtn.addEventListener('click', () => {
+    if (!previewMarkdown) return;
+    document.body.classList.add('printing-preview');
     setTimeout(() => {
       window.print();
-      // Re-hide after dialog closes (it's blocking, so this runs after)
-      if (printHeaderEl) printHeaderEl.hidden = true;
+      // Removed after print dialog (blocking call returns when dismissed)
+      document.body.classList.remove('printing-preview');
     }, 50);
+  });
+}
+// ---- SVG → PNG (for embedding mermaid diagrams in PPT) ------------------
+
+async function svgToPngDataUrl(svgEl, scale = 2) {
+  // Clone + normalize foreignObjects to native text so canvas can rasterize.
+  const clone = svgEl.cloneNode(true);
+  if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  inlineForeignObjectsAsText(clone);
+  const xml = new XMLSerializer().serializeToString(clone);
+  // unescape + encodeURIComponent handles non-Latin1 chars cleanly
+  const svg64 = btoa(unescape(encodeURIComponent(xml)));
+  const dataUrl = 'data:image/svg+xml;base64,' + svg64;
+
+  const bbox = svgEl.getBoundingClientRect();
+  const w = Math.max(bbox.width, 200);
+  const h = Math.max(bbox.height, 200);
+
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(w * scale);
+        canvas.height = Math.round(h * scale);
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.scale(scale, scale);
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve({ dataUrl: canvas.toDataURL('image/png'), width: w, height: h });
+      } catch (e) {
+        reject(e);
+      }
+    };
+    img.onerror = (e) => reject(new Error('SVG load failed: ' + e));
+    img.src = dataUrl;
+  });
+}
+
+// ---- PPT export from preview ---------------------------------------------
+
+async function savePreviewAsPpt() {
+  if (!previewMarkdown) return;
+  previewSavePptBtn.disabled = true;
+  previewStatus.textContent = 'Building slide deck…';
+
+  try {
+    const Pptx = await getPptxgen();
+    const pres = new Pptx();
+    pres.layout = 'LAYOUT_WIDE'; // 13.333" x 7.5" (16:9)
+
+    // Walk preview content, splitting on <hr> for slide boundaries.
+    const slides = [[]];
+    for (const el of previewContent.children) {
+      if (el.tagName === 'HR') {
+        slides.push([]);
+      } else {
+        slides[slides.length - 1].push(el);
+      }
+    }
+
+    const PAGE_W = 13.333;
+    const PAGE_H = 7.5;
+    const MARGIN = 0.5;
+    const CONTENT_W = PAGE_W - MARGIN * 2;
+
+    for (const slideEls of slides) {
+      if (slideEls.length === 0) continue;
+      const pSlide = pres.addSlide();
+      let y = MARGIN;
+
+      for (const el of slideEls) {
+        const tag = el.tagName;
+        if (tag === 'H1' || tag === 'H2' || tag === 'H3') {
+          const fontSize = tag === 'H1' ? 32 : tag === 'H2' ? 24 : 20;
+          pSlide.addText(el.textContent.trim(), {
+            x: MARGIN, y, w: CONTENT_W, h: 0.9,
+            fontSize, bold: true, fontFace: 'Inter, Arial',
+            color: '1A1A1A',
+          });
+          y += 1.0;
+        } else if (el.classList?.contains('mermaid-block')) {
+          const svg = el.querySelector('svg');
+          if (svg) {
+            try {
+              const { dataUrl, width, height } = await svgToPngDataUrl(svg, 2);
+              const remaining = PAGE_H - y - MARGIN;
+              const fitH = Math.min(remaining, 5);
+              const aspect = width / height;
+              let imgW = fitH * aspect;
+              let imgH = fitH;
+              if (imgW > CONTENT_W) {
+                imgW = CONTENT_W;
+                imgH = imgW / aspect;
+              }
+              const xCentered = (PAGE_W - imgW) / 2;
+              pSlide.addImage({ data: dataUrl, x: xCentered, y, w: imgW, h: imgH });
+              y += imgH + 0.2;
+            } catch (e) {
+              console.warn('Diagram → PNG failed', e);
+            }
+          }
+        } else if (tag === 'UL' || tag === 'OL') {
+          const items = [...el.querySelectorAll(':scope > li')].map((li) => ({
+            text: li.textContent.trim(),
+            options: { bullet: true },
+          }));
+          if (items.length) {
+            const blockH = Math.min(PAGE_H - y - MARGIN, 0.4 * items.length + 0.2);
+            pSlide.addText(items, {
+              x: MARGIN + 0.2, y, w: CONTENT_W - 0.4, h: blockH,
+              fontSize: 16, fontFace: 'Inter, Arial',
+              color: '333333',
+              valign: 'top',
+            });
+            y += blockH + 0.1;
+          }
+        } else if (tag === 'P' || tag === 'BLOCKQUOTE') {
+          const text = el.textContent.trim();
+          if (text) {
+            const blockH = 0.5;
+            pSlide.addText(text, {
+              x: MARGIN, y, w: CONTENT_W, h: blockH,
+              fontSize: 14, fontFace: 'Inter, Arial',
+              color: '333333',
+              valign: 'top',
+            });
+            y += blockH + 0.1;
+          }
+        } else if (tag === 'TABLE') {
+          const rows = [...el.querySelectorAll('tr')].map((tr) =>
+            [...tr.children].map((cell) => ({
+              text: cell.textContent.trim(),
+              options: cell.tagName === 'TH' ? { bold: true, fill: { color: 'EEEEEE' } } : {},
+            }))
+          );
+          if (rows.length) {
+            const tableH = Math.min(PAGE_H - y - MARGIN, 0.4 * rows.length + 0.2);
+            pSlide.addTable(rows, {
+              x: MARGIN, y, w: CONTENT_W, h: tableH,
+              fontSize: 12, fontFace: 'Inter, Arial', border: { type: 'solid', pt: 1, color: 'CCCCCC' },
+            });
+            y += tableH + 0.1;
+          }
+        }
+        if (y > PAGE_H - MARGIN) break; // overflow guard
+      }
+    }
+
+    const chat = getActiveChat();
+    const fname = `${(chat?.title ?? 'Chat').replace(/[^A-Za-z0-9-_ ]/g, '_').slice(0, 60)}.pptx`;
+    await pres.writeFile({ fileName: fname });
+    previewStatus.textContent = `Saved ${fname}.`;
+  } catch (e) {
+    console.error(e);
+    previewStatus.textContent = `PPT export failed: ${e?.message ?? e}`;
+  } finally {
+    previewSavePptBtn.disabled = previewMode !== 'synthesize-slides';
+  }
+}
+
+if (previewSavePptBtn) {
+  previewSavePptBtn.addEventListener('click', savePreviewAsPpt);
+}
+
+function toggleExportMenu(open) {
+  if (!exportMenuEl || !exportTriggerBtn) return;
+  const willOpen = open ?? exportMenuEl.hidden;
+  exportMenuEl.hidden = !willOpen;
+  exportTriggerBtn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+}
+
+if (exportTriggerBtn && exportMenuEl) {
+  exportTriggerBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleExportMenu();
+  });
+  exportMenuEl.addEventListener('click', (e) => {
+    const target = e.target.closest('.export-menu-item');
+    if (!target) return;
+    const action = target.dataset.export;
+    toggleExportMenu(false);
+    if (action === 'raw-pdf') exportRawPdf();
+    else if (action === 'synthesize-whitepaper') exportSynthesize('synthesize-whitepaper');
+    else if (action === 'synthesize-slides') exportSynthesize('synthesize-slides');
+  });
+  document.addEventListener('click', (e) => {
+    if (!exportMenuEl.hidden && !exportMenuEl.contains(e.target) && e.target !== exportTriggerBtn) {
+      toggleExportMenu(false);
+    }
+  });
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !exportMenuEl.hidden) toggleExportMenu(false);
   });
 }
 

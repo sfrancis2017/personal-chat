@@ -379,6 +379,47 @@ body.sidebar-collapsed .sidebar {
 [data-theme='light'] .theme-icon-dark,
 [data-theme='dark'] .theme-icon-light { display: none; }
 
+/* Export menu (popover from header download button) */
+.export-wrap { position: relative; }
+.export-menu[hidden] { display: none; }
+.export-menu {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  min-width: 280px;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  padding: 0.375rem;
+  z-index: 30;
+}
+.export-menu-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--color-fg);
+  font-family: inherit;
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.export-menu-item:hover { background: var(--color-bg); }
+.export-menu-item strong {
+  font-size: 0.875rem;
+  font-weight: 600;
+  display: block;
+}
+.export-menu-item span {
+  font-size: 0.75rem;
+  color: var(--color-fg-muted);
+}
+
 /* Conversation */
 .conversation {
   flex: 1;
@@ -611,6 +652,184 @@ body.sidebar-collapsed .sidebar {
 .diagram-modal-close:hover {
   background: var(--color-bg);
   border-color: var(--color-border-strong);
+}
+
+/* Synthesis preview modal — full viewport, structured for whitepaper/slide preview */
+.preview-modal[hidden] { display: none; }
+.preview-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--color-bg);
+  display: flex;
+  flex-direction: column;
+}
+.preview-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-elevated);
+}
+.preview-titleblock { min-width: 0; flex: 1; }
+.preview-title {
+  font-family: var(--font-sans);
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0 0 0.125rem;
+  letter-spacing: -0.01em;
+}
+.preview-subtitle {
+  font-size: 0.8125rem;
+  color: var(--color-fg-muted);
+  margin: 0;
+}
+.preview-close {
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-fg-muted);
+  font-size: 1.25rem;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.preview-close:hover {
+  border-color: var(--color-border-strong);
+  color: var(--color-fg);
+}
+
+.preview-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 2rem 1.5rem;
+  display: flex;
+  justify-content: center;
+}
+.preview-content {
+  width: 100%;
+  max-width: 720px;
+  font-family: var(--font-serif), Georgia, serif;
+  font-size: 1.0625rem;
+  line-height: 1.65;
+  color: var(--color-fg);
+}
+.preview-content h1 { font-family: var(--font-sans); font-size: 1.75rem; font-weight: 700; margin: 0 0 1rem; letter-spacing: -0.02em; }
+.preview-content h2 { font-family: var(--font-sans); font-size: 1.25rem; font-weight: 600; margin: 1.5rem 0 0.5rem; }
+.preview-content h3 { font-family: var(--font-sans); font-size: 1.0625rem; font-weight: 600; margin: 1.25rem 0 0.5rem; }
+.preview-content p { margin: 0.6rem 0; }
+.preview-content ul, .preview-content ol { padding-left: 1.5rem; }
+.preview-content table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.9375rem; }
+.preview-content th, .preview-content td { border: 1px solid var(--color-border); padding: 0.5rem 0.75rem; text-align: left; }
+.preview-content th { background: var(--color-bg-elevated); font-weight: 600; }
+.preview-content hr {
+  border: 0;
+  border-top: 2px dashed var(--color-border);
+  margin: 2rem 0;
+}
+.preview-content hr::after {
+  content: 'slide break';
+  display: block;
+  text-align: center;
+  font-family: var(--font-sans);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-fg-subtle);
+  margin-top: -0.7rem;
+  background: var(--color-bg);
+  padding: 0 0.5rem;
+  width: fit-content;
+  margin-left: auto;
+  margin-right: auto;
+}
+.preview-content pre {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.75rem;
+  overflow-x: auto;
+  font-size: 0.875rem;
+}
+.preview-content .mermaid-block {
+  margin: 1rem 0;
+  padding: 0.75rem;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  text-align: center;
+  width: 100%;
+  max-width: 100%;
+}
+.preview-content .mermaid-block svg { max-width: 100% !important; height: auto; }
+
+.preview-edit {
+  width: 100%;
+  max-width: 720px;
+  min-height: 60vh;
+  font-family: var(--font-mono);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  color: var(--color-fg);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 1rem;
+  resize: vertical;
+}
+
+.preview-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1.5rem;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-bg-elevated);
+}
+.preview-status {
+  font-size: 0.8125rem;
+  color: var(--color-fg-muted);
+  font-family: var(--font-sans);
+}
+.preview-actions-buttons {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.preview-action {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-fg);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.preview-action:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+  background: var(--color-bg);
+}
+.preview-action:disabled { opacity: 0.4; cursor: not-allowed; }
+.preview-action-primary {
+  background: var(--color-fg);
+  color: var(--color-bg);
+  border-color: var(--color-fg);
+}
+.preview-action-primary:hover:not(:disabled) {
+  opacity: 0.9;
+  background: var(--color-fg);
+  color: var(--color-bg);
 }
 /* Force mermaid's foreignObject HTML labels to its intended size — otherwise they
    inherit the assistant body's 17px serif and overflow the measured foreignObject. */
@@ -952,6 +1171,54 @@ body.sidebar-collapsed .sidebar {
     size: letter;
     margin: 0.75in;
   }
+
+  /* When printing from the synthesis preview, hide everything else and print
+     the preview content as the document. */
+  body.printing-preview .conversation,
+  body.printing-preview .print-header { display: none !important; }
+  body.printing-preview .preview-modal {
+    display: flex !important;
+    position: static !important;
+    background: white !important;
+    inset: auto !important;
+  }
+  body.printing-preview .preview-header,
+  body.printing-preview .preview-actions { display: none !important; }
+  body.printing-preview .preview-body {
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+  body.printing-preview .preview-content {
+    max-width: none !important;
+    color: black !important;
+    background: white !important;
+    width: 100% !important;
+  }
+  body.printing-preview .preview-content h1,
+  body.printing-preview .preview-content h2,
+  body.printing-preview .preview-content h3,
+  body.printing-preview .preview-content h4 { color: black !important; }
+  /* Slide deck mode: each top-level heading and each --- starts a new page */
+  body.printing-preview .preview-modal.mode-slides .preview-content h1,
+  body.printing-preview .preview-modal.mode-slides .preview-content hr {
+    page-break-before: always;
+  }
+  body.printing-preview .preview-modal.mode-slides .preview-content > :first-child {
+    page-break-before: auto;
+  }
+  /* Hide the "slide break" label decoration in print */
+  body.printing-preview .preview-content hr::after { display: none !important; }
+  body.printing-preview .preview-content hr {
+    border: 0 !important;
+    margin: 0 !important;
+  }
+  /* Mermaid in preview keeps its container border when printed */
+  body.printing-preview .preview-content .mermaid-block {
+    border: 1px solid #999 !important;
+    background: white !important;
+    page-break-inside: avoid;
+  }
+  body.printing-preview .preview-content .mermaid-block .mermaid-actions { display: none !important; }
 }
 
 @media (max-width: 640px) {

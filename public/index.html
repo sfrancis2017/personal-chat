@@ -36,13 +36,29 @@
         <img src="/img/logo.png" alt="Sajiv Francis" width="36" height="36" />
         <span class="brand-text">Chat</span>
       </a>
-      <button type="button" id="export-pdf" class="icon-button" aria-label="Export chat as PDF" title="Export chat as PDF">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-          <polyline points="7 10 12 15 17 10"></polyline>
-          <line x1="12" y1="15" x2="12" y2="3"></line>
-        </svg>
-      </button>
+      <div class="export-wrap">
+        <button type="button" id="export-trigger" class="icon-button" aria-label="Export chat" aria-haspopup="menu" aria-expanded="false" title="Export chat">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+        </button>
+        <div class="export-menu" id="export-menu" role="menu" hidden>
+          <button type="button" role="menuitem" class="export-menu-item" data-export="raw-pdf">
+            <strong>Export raw chat (PDF)</strong>
+            <span>Print-style export of the conversation as-is</span>
+          </button>
+          <button type="button" role="menuitem" class="export-menu-item" data-export="synthesize-whitepaper">
+            <strong>Synthesize as Whitepaper</strong>
+            <span>Claude polishes the chat into a structured document</span>
+          </button>
+          <button type="button" role="menuitem" class="export-menu-item" data-export="synthesize-slides">
+            <strong>Synthesize as Slide Deck</strong>
+            <span>Claude restructures into presentation slides</span>
+          </button>
+        </div>
+      </div>
       <button type="button" id="theme-toggle" aria-label="Toggle theme" class="icon-button">
         <span class="theme-icon-light" aria-hidden="true">☾</span>
         <span class="theme-icon-dark" aria-hidden="true">☀</span>
@@ -131,6 +147,29 @@
     <div class="diagram-modal" id="diagram-modal" hidden role="dialog" aria-modal="true" aria-label="Diagram full view">
       <button type="button" class="diagram-modal-close" id="diagram-modal-close" aria-label="Close diagram view">×</button>
       <div class="diagram-modal-content" id="diagram-modal-content"></div>
+    </div>
+
+    <div class="preview-modal" id="preview-modal" hidden role="dialog" aria-modal="true" aria-label="Synthesized export preview">
+      <header class="preview-header">
+        <div class="preview-titleblock">
+          <h2 class="preview-title" id="preview-title">Synthesizing…</h2>
+          <p class="preview-subtitle" id="preview-subtitle"></p>
+        </div>
+        <button type="button" class="preview-close" id="preview-close" aria-label="Close preview">×</button>
+      </header>
+      <div class="preview-body">
+        <div class="preview-content" id="preview-content"></div>
+        <textarea class="preview-edit" id="preview-edit" hidden aria-label="Edit synthesized markdown"></textarea>
+      </div>
+      <footer class="preview-actions">
+        <span class="preview-status" id="preview-status" aria-live="polite"></span>
+        <div class="preview-actions-buttons">
+          <button type="button" class="preview-action" id="preview-regenerate" disabled>Regenerate</button>
+          <button type="button" class="preview-action" id="preview-edit-toggle" disabled>Edit markdown</button>
+          <button type="button" class="preview-action preview-action-primary" id="preview-save-pdf" disabled>Save as PDF</button>
+          <button type="button" class="preview-action preview-action-primary" id="preview-save-ppt" disabled>Save as PPT</button>
+        </div>
+      </footer>
     </div>
 
     <script src="/chat.js" type="module"></script>
