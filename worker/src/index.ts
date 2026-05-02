@@ -253,8 +253,9 @@ async function streamFromAnthropic(
     },
     body: JSON.stringify({
       model: env.ANTHROPIC_MODEL,
-      // Synthesis can produce long whitepapers / multi-slide decks; chat turns rarely exceed 4k.
-      max_tokens: mode && mode !== 'chat' ? 8192 : 4096,
+      // Synthesis can produce long whitepapers / multi-slide decks (each diagram alone
+       // can be 1-2k tokens, and we want headroom for 2-3 diagrams). Chat rarely exceeds 4k.
+      max_tokens: mode && mode !== 'chat' ? 16384 : 4096,
       system: systemWithContext,
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
       stream: true,
