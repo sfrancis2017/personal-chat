@@ -43,7 +43,45 @@ interface ChatRequest {
   messages: ChatMessage[];
   topics?: string[];
   skill?: string;
+  /**
+   * 'chat' (default): normal RAG chat turn.
+   * 'synthesize-whitepaper': synthesize the conversation into a polished whitepaper
+   *   markdown. Skips RAG retrieval (the chat is the source).
+   * 'synthesize-slides': synthesize into slide-deck markdown (--- separated).
+   */
+  mode?: 'chat' | 'synthesize-whitepaper' | 'synthesize-slides';
 }
+
+// Synthesis system prompts — used when mode !== 'chat'. They override the
+// normal RAG-chat system prompt and consume the conversation history as the
+// source of truth, dropping iterative back-and-forth.
+const SYNTHESIS_PROMPTS: Record<string, string> = {
+  'synthesize-whitepaper': `You are converting a conversation between Sajiv Francis and his assistant into a polished whitepaper for a professional audience (peers, stakeholders, clients).
+
+Rules:
+1. Drop iterative back-and-forth ("make it clearer", "add another node", regeneration requests, etc.). Keep only the refined final content.
+2. Reorganize into a clear narrative: title → executive summary → context → analysis → recommendation/conclusion → sources.
+3. Use ## and ### headings. Use comparison tables where they clarify.
+4. Embed Mermaid diagrams from the chat verbatim in \`\`\`mermaid fences. Don't redraw them — copy the source.
+5. Match the Stratechery / Dan Luu register: direct, lightly editorial, no hedging, no "happy to help."
+6. Cite sources at the end with a **Sources** section, deduplicated.
+7. Don't pad. Aim for 600–1500 words depending on chat depth.
+8. Speak about Sajiv in the third person. Never name his employer — use "a Fortune 50 technology company."
+9. The output is markdown only. Start with the title (# Title) on the first line.`,
+  'synthesize-slides': `You are converting a conversation between Sajiv Francis and his assistant into a slide-deck markdown for presentation.
+
+Rules:
+1. Drop iterative back-and-forth. Keep only the refined final content.
+2. Use \`---\` on its own line to separate slides.
+3. Slide 1 (title slide): just \`# Title\` and an optional subtitle (one short line).
+4. Body slides: \`# Section title\`, then 3–5 concise bullet points (max ~10 words per bullet).
+5. Diagram slides: \`# Heading\` followed immediately by the Mermaid diagram in a \`\`\`mermaid fence. No bullet text on diagram slides.
+6. Conclusion slide: \`# Key takeaways\` with 2–3 bullets.
+7. Sources slide: \`# Sources\` with a deduplicated list of citations.
+8. 5–10 slides total. No fluff.
+9. Speak about Sajiv in the third person. Never name his employer — use "a Fortune 50 technology company."
+10. The output is markdown only. Start with the title slide.`,
+};
 
 // Skill modes — server-side overlays appended to the system prompt.
 // Keep the set small and high-signal for EA / software engineering use.
@@ -189,14 +227,22 @@ async function streamFromAnthropic(
   messages: ChatMessage[],
   context: Chunk[],
   skill: string | undefined,
+  mode: ChatRequest['mode'],
   env: Env
 ): Promise<Response> {
-  const contextBlock = context
-    .map((c) => `<chunk source="${c.source}">\n${c.text}\n</chunk>`)
-    .join('\n\n');
+  let systemWithContext: string;
 
-  const skillOverlay = skill && SKILLS[skill] ? `\n\n${SKILLS[skill]}` : '';
-  const systemWithContext = `${SYSTEM_PROMPT}${skillOverlay}\n\n<context>\n${contextBlock}\n</context>`;
+  if (mode && mode !== 'chat' && SYNTHESIS_PROMPTS[mode]) {
+    // Synthesis mode: ignore RAG context, use the dedicated prompt.
+    // The conversation history IS the source for synthesis.
+    systemWithContext = SYNTHESIS_PROMPTS[mode];
+  } else {
+    const contextBlock = context
+      .map((c) => `<chunk source="${c.source}">\n${c.text}\n</chunk>`)
+      .join('\n\n');
+    const skillOverlay = skill && SKILLS[skill] ? `\n\n${SKILLS[skill]}` : '';
+    systemWithContext = `${SYSTEM_PROMPT}${skillOverlay}\n\n<context>\n${contextBlock}\n</context>`;
+  }
 
   const upstream = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -207,7 +253,8 @@ async function streamFromAnthropic(
     },
     body: JSON.stringify({
       model: env.ANTHROPIC_MODEL,
-      max_tokens: 4096,
+      // Synthesis can produce long whitepapers / multi-slide decks; chat turns rarely exceed 4k.
+      max_tokens: mode && mode !== 'chat' ? 8192 : 4096,
       system: systemWithContext,
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
       stream: true,
@@ -343,11 +390,24 @@ export default {
         return new Response('messages required', { status: 400, headers: cors });
       }
 
-      const lastUser = [...body.messages].reverse().find((m) => m.role === 'user');
-      const query = lastUser?.content ?? '';
-      const context = await getContext(query, body.topics, env);
+      const synthesizing =
+        body.mode === 'synthesize-whitepaper' || body.mode === 'synthesize-slides';
 
-      const streamResp = await streamFromAnthropic(body.messages, context, body.skill, env);
+      // Skip RAG retrieval when synthesizing — the chat is the source of truth.
+      let context: Chunk[] = [];
+      if (!synthesizing) {
+        const lastUser = [...body.messages].reverse().find((m) => m.role === 'user');
+        const query = lastUser?.content ?? '';
+        context = await getContext(query, body.topics, env);
+      }
+
+      const streamResp = await streamFromAnthropic(
+        body.messages,
+        context,
+        body.skill,
+        body.mode,
+        env
+      );
       // Merge CORS into the streaming response
       const headers = new Headers(streamResp.headers);
       Object.entries(cors).forEach(([k, v]) => headers.set(k, v as string));
