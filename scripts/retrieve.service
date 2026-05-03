@@ -1,0 +1,17 @@
+[Unit]
+Description=Chat retrieve API (pgvector top-K)
+After=network.target postgresql-16.service
+Requires=postgresql-16.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/ingest
+EnvironmentFile=/root/ingest/retrieve.env
+ExecStart=/usr/bin/python3 /root/ingest/retrieve.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
