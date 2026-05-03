@@ -10,11 +10,14 @@
 interface Env {
   ANTHROPIC_API_KEY: string;
   ANTHROPIC_MODEL: string;
+  ANTHROPIC_HAIKU_MODEL?: string;          // For HyDE; defaults to a small model
   ALLOWED_ORIGINS: string;
   CHAT_TOKEN: string;
   OPENAI_API_KEY: string;
   RETRIEVE_URL: string;
   RETRIEVE_TOKEN: string;
+  // Optional KV binding for rate-limit counters (public mode only)
+  RATE_LIMIT_KV?: KVNamespace;
 }
 
 // Constant-time string comparison to avoid timing attacks on token check
@@ -27,11 +30,78 @@ function timingSafeEqual(a: string, b: string): boolean {
   return mismatch === 0;
 }
 
-function isAuthorized(req: Request, env: Env): boolean {
+type AuthMode = 'owner' | 'public';
+
+/**
+ * Check the request's bearer against CHAT_TOKEN.
+ *  - Valid token -> owner mode (full corpus, all features)
+ *  - Missing or invalid token -> public mode (visibility=public, rate-limited)
+ */
+function classifyAuth(req: Request, env: Env): AuthMode {
   const auth = req.headers.get('Authorization') ?? '';
   const match = auth.match(/^Bearer\s+(.+)$/);
-  if (!match) return false;
-  return timingSafeEqual(match[1], env.CHAT_TOKEN);
+  if (!match) return 'public';
+  return timingSafeEqual(match[1], env.CHAT_TOKEN) ? 'owner' : 'public';
+}
+
+// Legacy callers that still want a strict yes/no
+function isAuthorized(req: Request, env: Env): boolean {
+  return classifyAuth(req, env) === 'owner';
+}
+
+// Stable, one-way client identifier for query logging — never store raw tokens or IPs.
+async function clientHash(req: Request, env: Env, mode: AuthMode): Promise<string> {
+  const source =
+    mode === 'owner'
+      ? (req.headers.get('Authorization') ?? '')
+      : (req.headers.get('CF-Connecting-IP') ?? req.headers.get('X-Forwarded-For') ?? 'anon');
+  const data = new TextEncoder().encode(`${mode}:${source}`);
+  const buf = await crypto.subtle.digest('SHA-256', data);
+  const arr = Array.from(new Uint8Array(buf));
+  return arr.map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
+}
+
+// ---- Rate limit (public mode only) ---------------------------------------
+
+const PUBLIC_LIMIT_PER_MIN = 5;
+const PUBLIC_LIMIT_PER_DAY = 30;
+
+interface RateLimitResult {
+  ok: boolean;
+  reason?: 'minute' | 'day' | 'kv-missing';
+  retryAfterSeconds?: number;
+}
+
+/**
+ * KV-backed sliding window. Two counters per IP: one minute, one day.
+ * If RATE_LIMIT_KV isn't bound, public requests pass (fail-open) — owner
+ * mode is unaffected. We log this so it's noisy in dev.
+ */
+async function rateLimitPublic(req: Request, env: Env): Promise<RateLimitResult> {
+  if (!env.RATE_LIMIT_KV) {
+    console.warn('RATE_LIMIT_KV not bound — public requests are not rate-limited');
+    return { ok: true, reason: 'kv-missing' };
+  }
+  const ip = req.headers.get('CF-Connecting-IP') ?? 'anon';
+  const minuteKey = `rl:m:${ip}:${Math.floor(Date.now() / 60000)}`;
+  const dayKey = `rl:d:${ip}:${Math.floor(Date.now() / 86400000)}`;
+  const [mRaw, dRaw] = await Promise.all([
+    env.RATE_LIMIT_KV.get(minuteKey),
+    env.RATE_LIMIT_KV.get(dayKey),
+  ]);
+  const m = mRaw ? Number(mRaw) : 0;
+  const d = dRaw ? Number(dRaw) : 0;
+  if (m >= PUBLIC_LIMIT_PER_MIN) {
+    return { ok: false, reason: 'minute', retryAfterSeconds: 60 };
+  }
+  if (d >= PUBLIC_LIMIT_PER_DAY) {
+    return { ok: false, reason: 'day', retryAfterSeconds: 86400 };
+  }
+  await Promise.all([
+    env.RATE_LIMIT_KV.put(minuteKey, String(m + 1), { expirationTtl: 70 }),
+    env.RATE_LIMIT_KV.put(dayKey, String(d + 1), { expirationTtl: 86500 }),
+  ]);
+  return { ok: true };
 }
 
 interface ChatMessage {
@@ -100,11 +170,11 @@ Cite source chunks for every factual claim. Don't be agreeable for its own sake.
 
 const SYSTEM_PROMPT = `You are a personal assistant grounded in Sajiv Francis's published writing, architecture notes, talks, and cloud  materials. You speak about him in the third person.                             
                                      
-Rules:                          
-1. Ground your answers in the provided <context> blocks. Synthesize and reason from them, applying general technical knowledge to interpret what's there or fill gaps in framing. Don't invent specific facts about Sajiv personally (his projects, opinions, history) that aren't in the context — for those, say plainly what's missing.
-2. Don't pad. Match the Stratechery / Dan Luu register: direct, lightly editorial, no hedging, no "happy to help."                                                                        
-3. Never name Sajiv's employer. He works at "a Fortune 50 technology company."                                                                                                            
-4. If a question is completely off-topic (general trivia, current events, unrelated to Sajiv's work or technical interests), redirect: "This chat is grounded in Sajiv's writing — try sajivfrancis.com or docs.sajivfrancis.com."                                                                                                                                               
+Rules:
+1. Ground every claim in the provided <context> blocks. Synthesize and reason from them, applying general technical knowledge to interpret or frame what's there. **If the context is insufficient to answer, say so plainly — "I don't have material on that in the index" — and stop. Do not fabricate facts, projects, opinions, or history about Sajiv that aren't grounded in the context.**
+2. Don't pad. Match the Stratechery / Dan Luu register: direct, lightly editorial, no hedging, no "happy to help."
+3. Never name Sajiv's employer. He works at "a Fortune 50 technology company."
+4. If a question is completely off-topic (general trivia, current events, unrelated to Sajiv's work or technical interests), redirect: "This chat is grounded in Sajiv's writing — try sajivfrancis.com or docs.sajivfrancis.com."
                                                                                                                                                                                           
 Format:                                                                                                                                                                                   
 - Use Markdown freely — headings (## / ###), tables, bullet lists, code blocks. The chat renders Markdown.
@@ -124,7 +194,25 @@ Format:
   • Azure: \`compute\` (#cfe2ff / #084298), \`storage\` (#d1e7dd / #0f5132), \`network\` (#fff3cd / #664d03), \`identity\` (#f8d7da / #842029).
   Pick the convention that fits the domain; use only one per diagram. Keep \`classDef\` definitions minimal — typically 3–5 classes.                                      
 - Cite source chunks inline as italics, e.g. *(LocalizedSLMBuild.md)* or *(BPMN — S4HANA / J62_S4HANA_ASSETACCOUNTING)*, using each chunk's source attribute.                             
-- End every substantive response with a **Sources** heading and a deduped bullet list of the source attributes you cited.`;  
+- End every substantive response with a **Sources** heading and a deduped bullet list of the source attributes you cited.`;
+
+// Public-mode system prompt — restricts to Sajiv's published writing, refuses to
+// speculate beyond what's in the public corpus, and politely redirects deep
+// queries that would need private materials. Same Stratechery register;
+// shorter, more conservative.
+const PUBLIC_SYSTEM_PROMPT = `You are a public-facing assistant on Sajiv Francis's website. You answer only from Sajiv's **publicly published writing** — the chunks in the <context> block. You speak about him in the third person.
+
+Rules:
+1. Ground every claim in the provided <context>. If the context is insufficient — or if a question requires private materials (drafts, internal notes, books from his reference library) — say plainly: "I don't have published material on that. For deeper context, try sajivfrancis.com or docs.sajivfrancis.com." Then stop.
+2. Don't fabricate. No invented opinions, projects, dates, employers, or history. If you're unsure, say so.
+3. Never name Sajiv's employer. He works at "a Fortune 50 technology company."
+4. Match a curious, helpful register — direct, lightly editorial, no hedging, but slightly less opinionated than internal notes. Aim to be useful to a technical reader who's just discovered the site.
+5. Off-topic questions (current events, general trivia, unrelated coding help): redirect — "This chat is grounded in Sajiv's published writing. For general questions, the rest of the web is better."
+
+Format:
+- Use Markdown freely. Mermaid diagrams in \`\`\`mermaid fences when they clarify.
+- Cite source chunks inline as italics, e.g. *(BlogPost: Title)*, using each chunk's source attribute.
+- End responses that draw on multiple sources with a **Sources** heading and a deduped bullet list.`;
 
 // ---- Context retrieval: OpenAI embedding → pgvector top-K ----------------
 
@@ -167,17 +255,80 @@ async function embedQuery(query: string, env: Env): Promise<number[] | null> {
   }
 }
 
+/**
+ * HyDE — generate a hypothetical answer with a small/fast model, embed THAT
+ * (instead of the bare query). Closer to the embedding distribution of
+ * actual document chunks. Real win for short / conversational follow-ups.
+ *
+ * On any failure, returns the original query so the chat doesn't break.
+ */
+async function hyde(query: string, env: Env): Promise<string> {
+  if (!query || query.length < 4) return query;
+  const model = env.ANTHROPIC_HAIKU_MODEL ?? 'claude-haiku-4-5-20251001';
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        'x-api-key': env.ANTHROPIC_API_KEY,
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 200,
+        system:
+          "Write a short hypothetical answer to the user's question — 2-4 sentences, factual register, as if quoting from reference material. " +
+          'No preamble, no caveats, no "I think". Output only the answer text.',
+        messages: [{ role: 'user', content: query }],
+      }),
+    });
+    if (!r.ok) return query;
+    const j: any = await r.json();
+    const text = j.content?.[0]?.text;
+    return typeof text === 'string' && text.trim().length > 0 ? text.trim() : query;
+  } catch {
+    return query;
+  }
+}
+
+interface RetrievedContext {
+  chunks: Chunk[];
+  hydeText: string;
+}
+
+/**
+ * Hybrid retrieval pipeline:
+ *   1. HyDE-rewrite the query to a hypothetical answer
+ *   2. Embed that
+ *   3. Send to droplet /retrieve with embedding + raw query (for sparse FTS)
+ *      + topic + visibility + mode + client_hash for logging
+ *   4. Droplet does dense + sparse + RRF + MMR, returns top-K
+ */
 async function getContext(
   query: string,
   topics: string[] | undefined,
+  visibility: string[] | undefined,
+  mode: AuthMode,
+  clientId: string,
   env: Env
-): Promise<Chunk[]> {
-  const embedding = await embedQuery(query, env);
-  if (!embedding) return MOCK_CHUNKS;
+): Promise<RetrievedContext> {
+  const hydeText = await hyde(query, env);
+  const embedding = await embedQuery(hydeText, env);
+  if (!embedding) return { chunks: MOCK_CHUNKS, hydeText };
 
   const cleanTopics = (topics ?? [])
     .map((t) => (typeof t === 'string' ? t.trim() : ''))
     .filter(Boolean);
+
+  const body: any = {
+    embedding,
+    query,                      // for sparse FTS half + logging
+    hyde_text: hydeText,
+    mode,
+    client_hash: clientId,
+  };
+  if (cleanTopics.length) body.topics = cleanTopics;
+  if (visibility && visibility.length) body.visibility = visibility;
 
   try {
     const r = await fetch(env.RETRIEVE_URL, {
@@ -186,18 +337,16 @@ async function getContext(
         'Content-Type': 'application/json',
         Authorization: `Bearer ${env.RETRIEVE_TOKEN}`,
       },
-      body: JSON.stringify(
-        cleanTopics.length ? { embedding, topics: cleanTopics } : { embedding }
-      ),
+      body: JSON.stringify(body),
     });
     if (!r.ok) {
       console.error('retrieve API error', r.status, await r.text());
-      return MOCK_CHUNKS;
+      return { chunks: MOCK_CHUNKS, hydeText };
     }
     const j: any = await r.json();
-    if (!j.chunks?.length) return MOCK_CHUNKS;
+    if (!j.chunks?.length) return { chunks: MOCK_CHUNKS, hydeText };
 
-    return j.chunks.map((c: any) => {
+    const chunks = j.chunks.map((c: any) => {
       const title =
         (c.metadata && typeof c.metadata === 'object' && c.metadata.title) ||
         c.source_path ||
@@ -206,9 +355,10 @@ async function getContext(
       const topicSuffix = c.topic ? ` — ${c.topic}` : '';
       return { source: `${title}${topicSuffix}`, text: c.text };
     });
+    return { chunks, hydeText };
   } catch (e) {
     console.error('retrieve fetch failed', e);
-    return MOCK_CHUNKS;
+    return { chunks: MOCK_CHUNKS, hydeText };
   }
 }
 
@@ -264,6 +414,7 @@ async function streamFromAnthropic(
   context: Chunk[],
   skill: string | undefined,
   mode: ChatRequest['mode'],
+  authMode: AuthMode,
   env: Env
 ): Promise<Response> {
   // Build the system prompt as cacheable blocks. Anthropic's prompt caching
@@ -290,9 +441,13 @@ async function streamFromAnthropic(
   } else {
     // Chat: cache the base system prompt + (if present) the skill overlay.
     // The RAG context block is volatile per query — keep uncached at the end.
-    const stable = skill && SKILLS[skill]
-      ? `${SYSTEM_PROMPT}\n\n${SKILLS[skill]}`
-      : SYSTEM_PROMPT;
+    // Public mode uses a stricter prompt and skips skill overlays (they're an
+    // owner-side workflow — adversarial review for stakeholders, etc.).
+    const basePrompt = authMode === 'public' ? PUBLIC_SYSTEM_PROMPT : SYSTEM_PROMPT;
+    const skillAllowed = authMode === 'owner' && skill && SKILLS[skill];
+    const stable = skillAllowed
+      ? `${basePrompt}\n\n${SKILLS[skill]}`
+      : basePrompt;
     systemBlocks.push({
       type: 'text',
       text: stable,
@@ -400,17 +555,18 @@ export default {
       });
     }
 
-    if (url.pathname === '/topics' && req.method === 'GET') {
-      if (!isAuthorized(req, env)) {
-        return new Response(JSON.stringify({ error: 'unauthorized' }), {
-          status: 401,
-          headers: { 'Content-Type': 'application/json', ...cors },
-        });
-      }
+    // /topics and /library are public-friendly: no token required.
+    // Public requests get filtered to visibility=public; owner sees everything.
+    if (
+      (url.pathname === '/topics' || url.pathname === '/library') &&
+      req.method === 'GET'
+    ) {
+      const authMode = classifyAuth(req, env);
       try {
-        // Derive the /topics URL from RETRIEVE_URL (which points at /retrieve)
-        const topicsUrl = env.RETRIEVE_URL.replace(/\/retrieve\/?$/, '/topics');
-        const r = await fetch(topicsUrl, {
+        const route = url.pathname; // '/topics' or '/library'
+        const visQuery = authMode === 'public' ? '?visibility=public' : '';
+        const upstreamUrl = env.RETRIEVE_URL.replace(/\/retrieve\/?$/, route) + visQuery;
+        const r = await fetch(upstreamUrl, {
           headers: { Authorization: `Bearer ${env.RETRIEVE_TOKEN}` },
         });
         const body = await r.text();
@@ -467,16 +623,11 @@ export default {
     }
 
     if (url.pathname === '/chat' && req.method === 'POST') {
-      if (!isAuthorized(req, env)) {
-        return new Response(
-          `data: ${JSON.stringify({ error: 'Unauthorized: invalid or missing access token.' })}\n\n`,
-          {
-            status: 401,
-            headers: { 'Content-Type': 'text/event-stream', ...cors },
-          }
-        );
-      }
+      const authMode = classifyAuth(req, env);
 
+      // Public mode: rate-limit. Owner mode: no limit.
+      // Synthesis modes are owner-only — public visitors can't trigger expensive
+      // 16k-token whitepaper generations.
       let body: ChatRequest;
       try {
         body = await req.json();
@@ -490,19 +641,51 @@ export default {
       const synthesizing =
         body.mode === 'synthesize-whitepaper' || body.mode === 'synthesize-slides';
 
+      if (authMode === 'public') {
+        if (synthesizing) {
+          return new Response(
+            `data: ${JSON.stringify({ error: 'Synthesis is owner-only. Sign in with an access token to use this feature.' })}\n\n`,
+            { status: 403, headers: { 'Content-Type': 'text/event-stream', ...cors } }
+          );
+        }
+        const rl = await rateLimitPublic(req, env);
+        if (!rl.ok) {
+          return new Response(
+            `data: ${JSON.stringify({
+              error: rl.reason === 'minute'
+                ? 'Rate limit: max 5 messages per minute. Try again shortly.'
+                : 'Rate limit: max 30 messages per day. Come back tomorrow or sign in.',
+            })}\n\n`,
+            {
+              status: 429,
+              headers: {
+                'Content-Type': 'text/event-stream',
+                'Retry-After': String(rl.retryAfterSeconds ?? 60),
+                ...cors,
+              },
+            }
+          );
+        }
+      }
+
+      const clientId = await clientHash(req, env, authMode);
+
       // Skip RAG retrieval when synthesizing — the chat is the source of truth.
-      let context: Chunk[] = [];
+      let chunks: Chunk[] = [];
       if (!synthesizing) {
         const lastUser = [...body.messages].reverse().find((m) => m.role === 'user');
         const query = lastUser?.content ?? '';
-        context = await getContext(query, body.topics, env);
+        const visibility = authMode === 'public' ? ['public'] : undefined;
+        const ctx = await getContext(query, body.topics, visibility, authMode, clientId, env);
+        chunks = ctx.chunks;
       }
 
       const streamResp = await streamFromAnthropic(
         body.messages,
-        context,
+        chunks,
         body.skill,
         body.mode,
+        authMode,
         env
       );
       // Merge CORS into the streaming response
