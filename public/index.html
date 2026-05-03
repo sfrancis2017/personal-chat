@@ -63,6 +63,12 @@
         <span class="theme-icon-light" aria-hidden="true">☾</span>
         <span class="theme-icon-dark" aria-hidden="true">☀</span>
       </button>
+      <button type="button" id="signin-toggle" class="icon-button" aria-label="Sign in / out" title="Sign in (owner mode)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+          <circle cx="12" cy="7" r="4"></circle>
+        </svg>
+      </button>
     </header>
 
     <!-- Hidden on screen; shown only when printing -->
@@ -108,6 +114,13 @@
       <details class="sidebar-prompts" id="sidebar-prompts">
         <summary class="sidebar-prompts-summary">Quick prompts</summary>
         <div class="sidebar-prompts-list" id="sidebar-prompts-list"></div>
+      </details>
+      <details class="sidebar-library" id="sidebar-library">
+        <summary class="sidebar-library-summary">
+          <span>Library</span>
+          <span class="sidebar-library-count" id="sidebar-library-count"></span>
+        </summary>
+        <div class="sidebar-library-list" id="sidebar-library-list"></div>
       </details>
       <div class="sidebar-foot">
         <span class="sidebar-foot-note">Stored on this device</span>

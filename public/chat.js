@@ -39,17 +39,33 @@ const TOPICS_URL = API_URL.replace(/\/chat\/?$/, '/topics');
 const TOKEN_KEY = 'chat-access-token';
 
 function getToken() {
-  let t = localStorage.getItem(TOKEN_KEY);
-  if (!t) {
-    t = window.prompt(
-      'Enter your access token to use this chat.\n(Set as CHAT_TOKEN in the Worker; saved to this device only.)'
-    );
-    if (t) {
-      t = t.trim();
-      localStorage.setItem(TOKEN_KEY, t);
-    }
+  // Non-prompting read. Returns null in public mode — chat falls back to
+  // anonymous request; Worker treats as public. Owners use signIn() (below)
+  // to set the token explicitly via the header "Sign in" button.
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+// Explicit entry point — only fires when the user clicks the Sign in icon.
+// Public visitors never see this prompt automatically.
+function signIn() {
+  const t = window.prompt(
+    'Enter your access token for owner mode.\n(Set as CHAT_TOKEN in the Worker; saved to this device only.)'
+  );
+  if (t && t.trim()) {
+    localStorage.setItem(TOKEN_KEY, t.trim());
+    refreshAuthGatedUI();
+    loadTopics();
+    loadLibrary();
+    return t.trim();
   }
-  return t;
+  return null;
+}
+
+function signOut() {
+  localStorage.removeItem(TOKEN_KEY);
+  refreshAuthGatedUI();
+  loadTopics();
+  loadLibrary();
 }
 
 function clearToken() {
@@ -57,11 +73,28 @@ function clearToken() {
   refreshAuthGatedUI();
 }
 
-// UI elements that only make sense for token-holders (admin/owner mode).
-// Public visitors (no token) shouldn't see these.
+// Owner mode = token present and (assumed) valid. Public mode = no token.
+// We don't validate server-side here; if the token is wrong, requests will
+// 401/get-treated-as-public on the Worker. Cheap optimistic check.
+function isOwnerMode() {
+  return !!localStorage.getItem(TOKEN_KEY);
+}
+
+// UI elements that only make sense in owner mode. Public visitors don't see these.
 function refreshAuthGatedUI() {
-  const hasToken = !!localStorage.getItem(TOKEN_KEY);
-  if (uploadDocBtn) uploadDocBtn.hidden = !hasToken;
+  const owner = isOwnerMode();
+  // Owner-only widgets
+  if (uploadDocBtn) uploadDocBtn.hidden = !owner;
+  const skillWrap = document.querySelector('.skill-select-wrap');
+  if (skillWrap) skillWrap.hidden = !owner;
+  if (exportTriggerBtn) exportTriggerBtn.hidden = !owner;
+  // Sidebar history is local to the device. Hide for public visitors —
+  // less chrome on a clean read-only chat surface.
+  const sidebarList = document.getElementById('sidebar-list');
+  if (sidebarList) sidebarList.hidden = !owner;
+  // The "Stored on this device" footer is meaningless without history
+  const sidebarFoot = document.querySelector('.sidebar-foot');
+  if (sidebarFoot) sidebarFoot.hidden = !owner;
 }
 
 const conversation = document.getElementById('conversation');
@@ -174,13 +207,12 @@ function prettifyTopic(slug) {
 }
 
 async function loadTopics() {
+  // Works in both modes. Worker auto-filters to visibility=public when no token.
   const token = localStorage.getItem(TOKEN_KEY);
-  // Don't trigger an auth prompt just to load chips — wait for first message.
-  if (!token) return;
   try {
-    const r = await fetch(TOPICS_URL, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const headers = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const r = await fetch(TOPICS_URL, { headers });
     if (!r.ok) return;
     const j = await r.json();
     const topics = Array.isArray(j.topics) ? j.topics : [];
@@ -218,6 +250,64 @@ function renderTopics(topics) {
     topicChipsRow.appendChild(btn);
   }
   topicChips.hidden = false;
+}
+
+// ---- Library panel (sidebar corpus catalog) ------------------------------
+
+const LIBRARY_URL = API_URL.replace(/\/chat\/?$/, '/library');
+const libraryListEl = document.getElementById('sidebar-library-list');
+const libraryCountEl = document.getElementById('sidebar-library-count');
+
+async function loadLibrary() {
+  const token = localStorage.getItem(TOKEN_KEY);
+  try {
+    const headers = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const r = await fetch(LIBRARY_URL, { headers });
+    if (!r.ok) return;
+    const j = await r.json();
+    if (Array.isArray(j.topics)) renderLibrary(j);
+  } catch {
+    // silent — library is a nice-to-have
+  }
+}
+
+function renderLibrary(data) {
+  if (!libraryListEl) return;
+  libraryListEl.replaceChildren();
+  const total = data.total_chunks ?? 0;
+  const topicCount = data.topics?.length ?? 0;
+  if (libraryCountEl) {
+    libraryCountEl.textContent = total ? `${total} chunks · ${topicCount} topics` : '';
+  }
+  for (const t of data.topics ?? []) {
+    const topicEl = document.createElement('details');
+    topicEl.className = 'library-topic';
+
+    const summary = document.createElement('summary');
+    summary.className = 'library-topic-summary';
+    summary.innerHTML = `
+      <span class="library-topic-name">${prettifyTopic(t.topic)}</span>
+      <span class="library-topic-count">${t.count}</span>
+    `;
+    topicEl.appendChild(summary);
+
+    const sourcesWrap = document.createElement('div');
+    sourcesWrap.className = 'library-sources';
+    for (const s of t.sources ?? []) {
+      const row = document.createElement('div');
+      row.className = 'library-source';
+      if (s.visibility) row.dataset.visibility = s.visibility;
+      row.title = s.source_path;
+      row.innerHTML = `
+        <span class="library-source-title">${escapeHtml(s.title || s.source_path)}</span>
+        <span class="library-source-count">${s.chunks}</span>
+      `;
+      sourcesWrap.appendChild(row);
+    }
+    topicEl.appendChild(sourcesWrap);
+    libraryListEl.appendChild(topicEl);
+  }
 }
 
 function refreshChipPressedState() {
@@ -761,18 +851,16 @@ composer.addEventListener('submit', async (e) => {
   let assistantText = '';
 
   try {
-    const token = getToken();
-    if (!token) throw new Error('Access token required.');
-    // Lazy-load chips after first token entry (initial loadTopics() bails if no token).
+    const token = getToken();  // may be null — public mode is allowed
     if (topicChips.hidden) loadTopics();
     refreshAuthGatedUI();
 
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+
     const res = await fetch(API_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
+      headers,
       body: JSON.stringify({
         messages: chat.messages,
         topics: [...selectedTopics],
@@ -1413,6 +1501,17 @@ async function submitUpload(event) {
   }
 }
 
+const signinToggleBtn = document.getElementById('signin-toggle');
+if (signinToggleBtn) {
+  signinToggleBtn.addEventListener('click', () => {
+    if (isOwnerMode()) {
+      if (confirm('Sign out of owner mode? Chat history stays on this device.')) signOut();
+    } else {
+      signIn();
+    }
+  });
+}
+
 if (uploadDocBtn) uploadDocBtn.addEventListener('click', openUploadModal);
 if (uploadModalCloseBtn) uploadModalCloseBtn.addEventListener('click', closeUploadModal);
 if (uploadCancelBtn) uploadCancelBtn.addEventListener('click', closeUploadModal);
@@ -1500,6 +1599,7 @@ window.addEventListener('keydown', (e) => {
   // setActiveChat re-renders the conversation and applies any saved topics
   setActiveChat(activeChatId);
   loadTopics();
+  loadLibrary();
   refreshAuthGatedUI();
   input.focus();
 })();
