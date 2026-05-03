@@ -9,3 +9,19 @@ dist/
 
 # Personal runbook — local notes, not for sharing
 RAG_SETUP.md
+RAG_COMPARISON.md
+
+# Ingestion — secrets and generated metadata about personal materials.
+# Keep code in scripts/ in git; keep anything that lists or exposes
+# personal file content out.
+scripts/.env
+scripts/*.env
+scripts/secrets/
+scripts/credentials/
+scripts/service-account*.json
+scripts/google-creds*.json
+scripts/nextcloud-audit.md
+scripts/nextcloud-audit.*.md
+scripts/audit-*.md
+scripts/*.cache
+scripts/__pycache__/
