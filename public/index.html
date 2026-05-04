@@ -182,6 +182,11 @@
             <input type="text" id="upload-topic" required placeholder="e.g. ai-and-llms" autocomplete="off" />
             <span class="upload-hint">Slugified automatically. Existing topics: see chips above the composer.</span>
           </label>
+          <label class="upload-field">
+            <span>Title <em class="upload-optional">(optional)</em></span>
+            <input type="text" id="upload-title" placeholder="e.g. Speech and Language Processing — Jurafsky" autocomplete="off" />
+            <span class="upload-hint">Display name in the Library panel and chat citations. Defaults to filename if blank.</span>
+          </label>
           <label class="upload-field upload-field-row">
             <input type="checkbox" id="upload-public" />
             <span>Public — eligible for the public-mode chat (when enabled). Default is private.</span>

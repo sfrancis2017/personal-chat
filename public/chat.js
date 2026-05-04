@@ -1013,6 +1013,7 @@ const uploadModalCloseBtn = document.getElementById('upload-modal-close');
 const uploadForm = document.getElementById('upload-form');
 const uploadFileInput = document.getElementById('upload-file');
 const uploadTopicInput = document.getElementById('upload-topic');
+const uploadTitleInput = document.getElementById('upload-title');
 const uploadPublicCheckbox = document.getElementById('upload-public');
 const uploadStatusEl = document.getElementById('upload-status');
 const uploadCancelBtn = document.getElementById('upload-cancel');
@@ -1401,6 +1402,7 @@ function openUploadModal() {
   uploadStatusEl.className = 'upload-status';
   uploadFileInput.value = '';
   uploadTopicInput.value = '';
+  if (uploadTitleInput) uploadTitleInput.value = '';
   uploadPublicCheckbox.checked = false;
   uploadModal.hidden = false;
   document.body.style.overflow = 'hidden';
@@ -1464,6 +1466,7 @@ async function submitUpload(event) {
     const content_base64 = await fileToBase64(file);
     uploadStatusEl.textContent = `Uploading + embedding (this may take 10–60 seconds)…`;
 
+    const titleVal = uploadTitleInput?.value?.trim() || '';
     const res = await fetch(UPLOAD_URL, {
       method: 'POST',
       headers: {
@@ -1475,6 +1478,7 @@ async function submitUpload(event) {
         content_base64,
         topic,
         visibility: uploadPublicCheckbox.checked ? 'public' : 'private',
+        ...(titleVal ? { title: titleVal } : {}),
       }),
     });
 

@@ -346,13 +346,18 @@ def _hybrid_retrieve(
             rank_dict.setdefault(path, rank)
             fused[path] = fused.get(path, 0.0) + 1.0 / (RRF_K + rank)
             if path not in by_path:
+                # pgvector returns numpy.ndarray; convert to list at the boundary
+                # so MMR + cosine helpers don't trigger numpy truthiness errors.
+                emb = r[5]
+                if emb is not None and hasattr(emb, "tolist"):
+                    emb = emb.tolist()
                 by_path[path] = {
                     "source_url": r[0],
                     "source_path": r[1],
                     "text": r[2],
                     "topic": r[3],
                     "metadata": r[4],
-                    "embedding": r[5],
+                    "embedding": emb if emb is not None else [],
                 }
 
     _ingest_list(dense_rows, dense_rank)
@@ -374,13 +379,20 @@ def _hybrid_retrieve(
     return candidates, score_map
 
 
-def _cosine(a: list[float], b: list[float]) -> float:
-    """Cosine similarity between two equal-length vectors."""
-    if not a or not b or len(a) != len(b):
+def _cosine(a, b) -> float:
+    """Cosine similarity between two equal-length vectors. Tolerates list or
+    numpy.ndarray; uses len() comparisons instead of truthiness to avoid the
+    'ambiguous truth value' error numpy raises on multi-element arrays."""
+    if a is None or b is None:
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
+    try:
+        if len(a) == 0 or len(b) == 0 or len(a) != len(b):
+            return 0.0
+    except TypeError:
+        return 0.0
+    dot = sum(float(x) * float(y) for x, y in zip(a, b))
+    na = math.sqrt(sum(float(x) * float(x) for x in a))
+    nb = math.sqrt(sum(float(y) * float(y) for y in b))
     if na == 0 or nb == 0:
         return 0.0
     return dot / (na * nb)
@@ -403,7 +415,7 @@ def _mmr_select(
         return candidates
 
     # Pre-compute relevance to query for each candidate
-    rel = [_cosine(c.get("embedding") or [], query_embedding) for c in candidates]
+    rel = [_cosine(c.get("embedding"), query_embedding) for c in candidates]
     selected_idx: list[int] = []
     remaining = set(range(len(candidates)))
 
@@ -415,8 +427,8 @@ def _mmr_select(
     while len(selected_idx) < k and remaining:
         def mmr_score(i: int) -> float:
             max_sim_to_picked = max(
-                _cosine(candidates[i].get("embedding") or [],
-                        candidates[j].get("embedding") or [])
+                _cosine(candidates[i].get("embedding"),
+                        candidates[j].get("embedding"))
                 for j in selected_idx
             )
             return lam * rel[i] - (1 - lam) * max_sim_to_picked

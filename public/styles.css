@@ -255,6 +255,14 @@ a:hover { text-decoration: underline; }
   font-size: 0.75rem;
   color: var(--color-fg-muted);
 }
+.upload-optional {
+  font-style: italic;
+  font-weight: 400;
+  color: var(--color-fg-subtle);
+  text-transform: none;
+  letter-spacing: 0;
+  margin-left: 0.3em;
+}
 .upload-status {
   font-size: 0.8125rem;
   color: var(--color-fg-muted);

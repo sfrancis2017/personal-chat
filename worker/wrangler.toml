@@ -8,6 +8,10 @@ compatibility_flags = ["nodejs_compat"]
 ALLOWED_ORIGINS = "https://chat.sajivfrancis.com,https://sajivfrancis.com,https://www.sajivfrancis.com,http://localhost:8000,http://127.0.0.1:8000,http://localhost:4321,http://127.0.0.1:4321"
 ANTHROPIC_MODEL = "claude-sonnet-4-6"
 
+[[kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "df9b1650caba472d8df576b25b893212"
+
 # Secrets — set via:
 #   cd worker && npx wrangler secret put ANTHROPIC_API_KEY
 #   cd worker && npx wrangler secret put OPENAI_API_KEY  (Saturday)
