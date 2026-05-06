@@ -826,6 +826,10 @@ themeToggle.addEventListener('click', () => {
   const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
   document.documentElement.dataset.theme = next;
   localStorage.setItem('theme', next);
+  // Cross-subdomain cookie so sajivfrancis.com and docs.sajivfrancis.com
+  // pick up the same preference automatically.
+  document.cookie =
+    'theme=' + next + '; Domain=.sajivfrancis.com; Path=/; Max-Age=31536000; SameSite=Lax; Secure';
   // Mermaid stays on the light theme regardless of page theme — no re-init needed.
 });
 

@@ -18,10 +18,24 @@
     <link rel="stylesheet" href="/css/message-actions.css" />
 
     <script>
-      // Set theme before paint to avoid flash
-      const stored = localStorage.getItem('theme');
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      document.documentElement.dataset.theme = stored ?? (prefersDark ? 'dark' : 'light');
+      // Theme: read from cross-subdomain cookie first (so docs / chat /
+      // main stay in sync), fall back to localStorage, then to system
+      // preference. Set BEFORE paint to avoid a flash.
+      (function () {
+        const m = document.cookie.match(/(?:^|;\s*)theme=(light|dark)/);
+        const cookieTheme = m ? m[1] : null;
+        const stored = localStorage.getItem('theme');
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        const theme = cookieTheme || stored || (prefersDark ? 'dark' : 'light');
+        document.documentElement.dataset.theme = theme;
+        if (cookieTheme !== theme) {
+          document.cookie =
+            'theme=' + theme + '; Domain=.sajivfrancis.com; Path=/; Max-Age=31536000; SameSite=Lax; Secure';
+        }
+        if (stored !== theme) {
+          try { localStorage.setItem('theme', theme); } catch (_) {}
+        }
+      })();
     </script>
   </head>
   <body>
