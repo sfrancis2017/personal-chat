@@ -555,6 +555,52 @@ export default {
       });
     }
 
+    // Per-message thumbs-up / thumbs-down feedback. Frontend message-actions.js
+    // POSTs here when a user rates an assistant response. Stored in
+    // RATE_LIMIT_KV under `feedback:<messageId>` with a 90-day TTL.
+    // Public endpoint — no auth required (rate-limit-by-IP not added yet;
+    // the surface is small and idempotent).
+    if (url.pathname === '/feedback') {
+      if (req.method !== 'POST') {
+        return new Response('Method Not Allowed', { status: 405, headers: cors });
+      }
+      let body: {
+        messageId?: string;
+        rating?: 'up' | 'down' | null;
+        excerpt?: string;
+        timestamp?: string;
+      };
+      try {
+        body = await req.json();
+      } catch {
+        return new Response('Invalid JSON', { status: 400, headers: cors });
+      }
+      const messageId = body.messageId;
+      if (!messageId || typeof messageId !== 'string' || messageId.length > 200) {
+        return new Response('messageId required (1-200 chars)', { status: 400, headers: cors });
+      }
+      const entry = {
+        messageId,
+        rating: body.rating ?? null,
+        excerpt: (body.excerpt ?? '').slice(0, 500),
+        timestamp: body.timestamp ?? new Date().toISOString(),
+        ip: req.headers.get('CF-Connecting-IP') ?? 'unknown',
+        country: (req as unknown as { cf?: { country?: string } }).cf?.country ?? 'unknown',
+      };
+      if (env.RATE_LIMIT_KV) {
+        await env.RATE_LIMIT_KV.put(
+          `feedback:${messageId}`,
+          JSON.stringify(entry),
+          { expirationTtl: 60 * 60 * 24 * 90 },
+        );
+      }
+      console.log(`[feedback] ${entry.rating ?? 'removed'} on ${messageId}`);
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', ...cors },
+      });
+    }
+
     // /topics and /library are public-friendly: no token required.
     // Public requests get filtered to visibility=public; owner sees everything.
     if (
