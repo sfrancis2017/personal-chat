@@ -1,0 +1,106 @@
+/*
+ * message-actions.css
+ * Per-message Copy / Share / Thumbs Up / Thumbs Down action bar.
+ * Styled against the chat's existing editorial tokens (--color-fg,
+ * --color-bg-elevated, etc.) so light + dark themes work without
+ * extra CSS variables.
+ */
+
+.ma-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 0.5rem;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+/* Show when the parent message is hovered or focused */
+.message:hover .ma-bar,
+.message:focus-within .ma-bar,
+.ma-bar:focus-within {
+  opacity: 1;
+}
+
+/* Always visible on touch (no hover available) */
+@media (hover: none) {
+  .ma-bar {
+    opacity: 1;
+  }
+}
+
+.ma-sep {
+  display: inline-block;
+  width: 1px;
+  height: 14px;
+  background: var(--color-border);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+.ma-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-fg-subtle);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-family: inherit;
+  line-height: 1;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s, transform 0.1s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ma-btn:hover {
+  background: var(--color-bg-elevated);
+  color: var(--color-fg);
+}
+
+.ma-btn:active {
+  transform: scale(0.93);
+}
+
+.ma-btn svg {
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+.ma-btn-label {
+  font-size: 0.7rem;
+}
+
+.ma-btn--flashed {
+  background: var(--color-bg-elevated);
+  color: var(--color-fg);
+}
+
+/* Active states — site palette */
+.ma-btn--up.ma-btn--active {
+  color: #2f8f6e;
+  background: color-mix(in oklab, #2f8f6e 12%, transparent);
+}
+.ma-btn--up.ma-btn--active svg {
+  fill: #2f8f6e;
+  stroke: #2f8f6e;
+}
+
+.ma-btn--down.ma-btn--active {
+  color: var(--color-accent);
+  background: color-mix(in oklab, var(--color-accent) 12%, transparent);
+}
+.ma-btn--down.ma-btn--active svg {
+  fill: var(--color-accent);
+  stroke: var(--color-accent);
+}
+
+/* Hide action bar on print so PDF exports don't include the buttons */
+@media print {
+  .ma-bar {
+    display: none !important;
+  }
+}

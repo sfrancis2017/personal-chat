@@ -15,6 +15,7 @@
     <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
 
     <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/css/message-actions.css" />
 
     <script>
       // Set theme before paint to avoid flash
@@ -234,6 +235,16 @@
       </footer>
     </div>
 
+    <!-- Message actions (Copy / Share / Thumbs Up/Down) — loaded before
+         chat.js so window.MessageActions is available when chat.js attaches
+         action bars to assistant messages. -->
+    <script src="/js/message-actions.js"></script>
+    <script>
+      window.MessageActions.workerUrl =
+        window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+          ? 'http://localhost:8787'
+          : 'https://chat-worker.sfrancis2017.workers.dev';
+    </script>
     <script src="/chat.js" type="module"></script>
   </body>
 </html>

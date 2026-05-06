@@ -435,12 +435,20 @@ async function renderConversation() {
   }
   const chat = getActiveChat();
   if (!chat || chat.messages.length === 0) return;
-  for (const m of chat.messages) {
+  for (let i = 0; i < chat.messages.length; i++) {
+    const m = chat.messages[i];
     const body = appendMessage(m.role, '');
     if (m.role === 'assistant') {
       // Fire-and-forget markdown render; await isn't necessary since each appends to its own node.
       renderMarkdown(body, m.content).catch(() => {
         body.textContent = m.content;
+      });
+      // Attach Copy / Share / Thumbs action bar. Stable id derived from
+      // chat id + index so localStorage feedback survives reloads.
+      window.MessageActions?.attach(body.parentElement, {
+        content: m.content,
+        messageId: `${chat.id}-${i}`,
+        title: 'Response from Sajiv Francis',
       });
     } else {
       body.textContent = m.content;
@@ -930,6 +938,13 @@ composer.addEventListener('submit', async (e) => {
     chat.updatedAt = Date.now();
     saveChats();
     renderSidebar();
+    // Attach action bar after stream + markdown render are complete.
+    // Index = messages.length - 1 since we just pushed the assistant turn.
+    window.MessageActions?.attach(assistantBody.parentElement, {
+      content: assistantText,
+      messageId: `${chat.id}-${chat.messages.length - 1}`,
+      title: 'Response from Sajiv Francis',
+    });
   } catch (err) {
     cursor.remove();
     assistantBody.parentElement.classList.remove('assistant');
