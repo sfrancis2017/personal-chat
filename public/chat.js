@@ -1196,6 +1196,7 @@ const previewRegenBtn = document.getElementById('preview-regenerate');
 const previewEditToggleBtn = document.getElementById('preview-edit-toggle');
 const previewCopyMdBtn = document.getElementById('preview-copy-md');
 const previewDownloadMdBtn = document.getElementById('preview-download-md');
+const previewSaveArtifactBtn = document.getElementById('preview-save-artifact');
 const previewSavePdfBtn = document.getElementById('preview-save-pdf');
 const previewSavePptBtn = document.getElementById('preview-save-ppt');
 const previewEmailBtn = document.getElementById('preview-email');
@@ -1224,6 +1225,7 @@ function setPreviewActionsEnabled(enabled) {
     previewEditToggleBtn,
     previewCopyMdBtn,
     previewDownloadMdBtn,
+    previewSaveArtifactBtn,
     previewSavePdfBtn,
     previewSavePptBtn,
     previewEmailBtn,
@@ -1562,6 +1564,68 @@ if (previewDownloadMdBtn) {
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+}
+
+// Save the current preview markdown (respecting edits in the Edit pane) to
+// the artifact store so the work tool can fetch it via GET /api/artifacts.
+// This is the manual counterpart to the bulk synthesize-all auto-save —
+// gives the user explicit control when they want to review/edit before
+// publishing to the API.
+if (previewSaveArtifactBtn) {
+  previewSaveArtifactBtn.addEventListener('click', async () => {
+    const md = previewEditing && previewEdit ? previewEdit.value : previewMarkdown;
+    if (!md) return;
+    const token = getToken();
+    if (!token) {
+      alert('Owner mode required.');
+      return;
+    }
+    // Mode → artifacts-key mapping (matches the POST /api/artifacts contract).
+    const modeKey =
+      previewMode === 'synthesize-slides' ? 'slides' :
+      previewMode === 'synthesize-email' ? 'email' :
+      'whitepaper';
+    // Title from H1 if present, else fall back to chat title.
+    const titleMatch = md.match(/^#\s+(.+)$/m);
+    const chat = getActiveChat();
+    const title = (titleMatch ? titleMatch[1] : (chat?.title ?? 'Untitled'))
+      .trim()
+      .slice(0, 300);
+
+    const originalText = previewSaveArtifactBtn.textContent;
+    previewSaveArtifactBtn.textContent = 'Saving…';
+    previewSaveArtifactBtn.disabled = true;
+    const url = API_URL.replace(/\/chat\/?$/, '/api/artifacts');
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          mode: previewMode ?? 'synthesize-whitepaper',
+          title,
+          source_chat_title: chat?.title ?? null,
+          artifacts: { [modeKey]: md },
+        }),
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`HTTP ${res.status}: ${errText.slice(0, 200)}`);
+      }
+      const saved = await res.json();
+      previewSaveArtifactBtn.textContent = `Saved ✓ ${saved.id}`;
+    } catch (err) {
+      console.error('Save to artifacts failed:', err);
+      previewSaveArtifactBtn.textContent = 'Save failed';
+    } finally {
+      setTimeout(() => {
+        previewSaveArtifactBtn.textContent = originalText;
+        previewSaveArtifactBtn.disabled = false;
+      }, 3000);
+    }
   });
 }
 
