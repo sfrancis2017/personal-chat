@@ -257,6 +257,21 @@ function renderTopics(topics) {
 const LIBRARY_URL = API_URL.replace(/\/chat\/?$/, '/library');
 const libraryListEl = document.getElementById('sidebar-library-list');
 const libraryCountEl = document.getElementById('sidebar-library-count');
+const librarySearchEl = document.getElementById('library-search');
+const librarySelectionSummary = document.getElementById('library-selection-summary');
+const librarySelectionCountEl = document.getElementById('library-selection-count');
+const librarySelectionClearBtn = document.getElementById('library-selection-clear');
+
+const sourceChips = document.getElementById('source-chips');
+const sourceChipsRow = document.getElementById('source-chips-row');
+
+const confidenceToggle = document.getElementById('confidence-toggle');
+
+// Source selection — sources the user has pinned for the next chat turns.
+// Map keyed by source_path → { title, topic }. Persists per-chat (in chat.sourceSelections).
+const selectedSources = new Map();
+// Latest library data (cached so search/filter can re-render without re-fetching)
+let libraryData = null;
 
 async function loadLibrary() {
   const token = localStorage.getItem(TOKEN_KEY);
@@ -266,48 +281,194 @@ async function loadLibrary() {
     const r = await fetch(LIBRARY_URL, { headers });
     if (!r.ok) return;
     const j = await r.json();
-    if (Array.isArray(j.topics)) renderLibrary(j);
+    if (Array.isArray(j.topics)) {
+      libraryData = j;
+      renderLibrary();
+    }
   } catch {
     // silent — library is a nice-to-have
   }
 }
 
-function renderLibrary(data) {
-  if (!libraryListEl) return;
+// Lowercase substring match across topic name, source title, and source_path.
+function librarySourceMatches(query, topic, source) {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  return (
+    (topic ?? '').toLowerCase().includes(q) ||
+    (source.title ?? '').toLowerCase().includes(q) ||
+    (source.source_path ?? '').toLowerCase().includes(q)
+  );
+}
+
+// Re-render the library list using the cached data + current search query.
+// Called on initial load, on search input, and after selection toggles.
+function renderLibrary() {
+  if (!libraryListEl || !libraryData) return;
+  const query = (librarySearchEl?.value ?? '').trim();
   libraryListEl.replaceChildren();
-  const total = data.total_chunks ?? 0;
-  const topicCount = data.topics?.length ?? 0;
+
+  const total = libraryData.total_chunks ?? 0;
+  const topicCount = libraryData.topics?.length ?? 0;
   if (libraryCountEl) {
     libraryCountEl.textContent = total ? `${total} chunks · ${topicCount} topics` : '';
   }
-  for (const t of data.topics ?? []) {
+
+  let anyMatch = false;
+  for (const t of libraryData.topics ?? []) {
+    const matchingSources = (t.sources ?? []).filter((s) =>
+      librarySourceMatches(query, t.topic, s)
+    );
+    if (matchingSources.length === 0) continue;
+    anyMatch = true;
+
     const topicEl = document.createElement('details');
     topicEl.className = 'library-topic';
+    // Auto-open topics when searching so matches are visible without an extra click
+    if (query) topicEl.open = true;
 
     const summary = document.createElement('summary');
     summary.className = 'library-topic-summary';
     summary.innerHTML = `
       <span class="library-topic-name">${prettifyTopic(t.topic)}</span>
-      <span class="library-topic-count">${t.count}</span>
+      <span class="library-topic-count">${matchingSources.length}${query ? '/' + (t.sources?.length ?? 0) : ''}</span>
     `;
     topicEl.appendChild(summary);
 
     const sourcesWrap = document.createElement('div');
     sourcesWrap.className = 'library-sources';
-    for (const s of t.sources ?? []) {
-      const row = document.createElement('div');
+    for (const s of matchingSources) {
+      const row = document.createElement('label');
       row.className = 'library-source';
       if (s.visibility) row.dataset.visibility = s.visibility;
       row.title = s.source_path;
+      const isSelected = selectedSources.has(s.source_path);
       row.innerHTML = `
+        <input type="checkbox" class="library-source-checkbox"
+               data-source-path="${escapeHtml(s.source_path)}"
+               ${isSelected ? 'checked' : ''} />
         <span class="library-source-title">${escapeHtml(s.title || s.source_path)}</span>
         <span class="library-source-count">${s.chunks}</span>
       `;
+      const cb = row.querySelector('.library-source-checkbox');
+      cb.addEventListener('change', () => {
+        if (cb.checked) {
+          selectedSources.set(s.source_path, {
+            title: s.title || s.source_path,
+            topic: t.topic,
+          });
+        } else {
+          selectedSources.delete(s.source_path);
+        }
+        persistSelectedSources();
+        renderSourceChips();
+        renderLibrarySelectionSummary();
+      });
       sourcesWrap.appendChild(row);
     }
     topicEl.appendChild(sourcesWrap);
     libraryListEl.appendChild(topicEl);
   }
+
+  if (!anyMatch && query) {
+    const empty = document.createElement('div');
+    empty.className = 'library-empty';
+    empty.textContent = `No sources match "${query}"`;
+    libraryListEl.appendChild(empty);
+  }
+
+  renderLibrarySelectionSummary();
+}
+
+// Renders the per-thread "X selected" summary + Clear button inside the
+// library panel.
+function renderLibrarySelectionSummary() {
+  if (!librarySelectionSummary) return;
+  const n = selectedSources.size;
+  if (n === 0) {
+    librarySelectionSummary.hidden = true;
+    return;
+  }
+  librarySelectionSummary.hidden = false;
+  if (librarySelectionCountEl) {
+    librarySelectionCountEl.textContent = `${n} selected`;
+  }
+}
+
+// Renders the source-chips row above the composer. Each chip = one pinned
+// source; click × to remove.
+function renderSourceChips() {
+  if (!sourceChipsRow || !sourceChips) return;
+  sourceChipsRow.replaceChildren();
+  if (selectedSources.size === 0) {
+    sourceChips.hidden = true;
+    return;
+  }
+  sourceChips.hidden = false;
+  for (const [path, meta] of selectedSources) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'source-chip';
+    chip.dataset.sourcePath = path;
+    chip.title = path;
+    chip.innerHTML = `
+      <span class="source-chip-title">${escapeHtml(meta.title || path)}</span>
+      <span class="source-chip-remove" aria-label="Remove source">×</span>
+    `;
+    chip.addEventListener('click', () => {
+      selectedSources.delete(path);
+      persistSelectedSources();
+      renderSourceChips();
+      renderLibrarySelectionSummary();
+      renderLibrary();  // re-render library so checkbox updates
+    });
+    sourceChipsRow.appendChild(chip);
+  }
+}
+
+// Persist selectedSources to the active chat thread so re-opens the same
+// scope. Stored as a plain array since Map doesn't serialize to JSON.
+function persistSelectedSources() {
+  const chat = getActiveChat();
+  if (!chat) return;
+  chat.sourceSelections = [...selectedSources.entries()].map(([path, meta]) => ({
+    source_path: path,
+    title: meta.title,
+    topic: meta.topic,
+  }));
+  saveChats();
+}
+
+// Load source selections from active chat (called when switching threads).
+function loadSourceSelectionsFromActiveChat() {
+  selectedSources.clear();
+  const chat = getActiveChat();
+  if (chat?.sourceSelections && Array.isArray(chat.sourceSelections)) {
+    for (const s of chat.sourceSelections) {
+      if (s.source_path) {
+        selectedSources.set(s.source_path, {
+          title: s.title || s.source_path,
+          topic: s.topic ?? null,
+        });
+      }
+    }
+  }
+  renderSourceChips();
+  renderLibrarySelectionSummary();
+}
+
+// Wire search input and clear button.
+if (librarySearchEl) {
+  librarySearchEl.addEventListener('input', () => renderLibrary());
+}
+if (librarySelectionClearBtn) {
+  librarySelectionClearBtn.addEventListener('click', () => {
+    selectedSources.clear();
+    persistSelectedSources();
+    renderSourceChips();
+    renderLibrarySelectionSummary();
+    renderLibrary();
+  });
 }
 
 function refreshChipPressedState() {
@@ -407,6 +568,7 @@ function setActiveChat(id) {
     if (skillSelect) skillSelect.value = chat.skill ?? '';
   }
   refreshChipPressedState();
+  loadSourceSelectionsFromActiveChat();
   renderConversation();
   renderSidebar();
   saveChats();
@@ -870,6 +1032,14 @@ composer.addEventListener('submit', async (e) => {
     const headers = { 'Content-Type': 'application/json' };
     if (token) headers.Authorization = `Bearer ${token}`;
 
+    const confidenceMode = !!confidenceToggle?.checked;
+    if (confidenceMode && selectedSources.size === 0) {
+      throw new Error(
+        'High-confidence mode requires at least one source to be pinned. ' +
+        'Open the Library, search for the documents you want grounded against, and check them.'
+      );
+    }
+
     const res = await fetch(API_URL, {
       method: 'POST',
       headers,
@@ -877,6 +1047,8 @@ composer.addEventListener('submit', async (e) => {
         messages: chat.messages,
         topics: [...selectedTopics],
         skill: chat.skill ?? '',
+        source_paths: [...selectedSources.keys()],
+        confidence_mode: confidenceMode,
       }),
     });
 

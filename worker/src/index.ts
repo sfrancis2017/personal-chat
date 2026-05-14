@@ -119,6 +119,21 @@ interface ChatRequest {
   topics?: string[];
   skill?: string;
   /**
+   * Source-path filter — restricts retrieval to chunks from these specific
+   * sources (documents/files). Combines additively with `topics`. Useful
+   * for "make sure Claude grounds in *these* documents specifically."
+   */
+  source_paths?: string[];
+  /**
+   * High-confidence mode (owner-only by client convention). When true:
+   *   - Retrieval pulls a wider candidate set (HYBRID_CANDIDATES bumped to 30, top_K to 15)
+   *   - System prompt overlay enforces strict citation per claim, encourages
+   *     "I don't have evidence for X" over confident-but-wrong assertions
+   *   - Post-generation verification pass runs against the cited chunks
+   * Trade-off: slower + costlier per turn. Use for work-grade output.
+   */
+  confidence_mode?: boolean;
+  /**
    * 'chat' (default): normal RAG chat turn.
    * 'synthesize-whitepaper': synthesize the conversation into a polished whitepaper
    *   markdown. Skips RAG retrieval (the chat is the source).
@@ -198,6 +213,33 @@ Rules:
 
 // Skill modes — server-side overlays appended to the system prompt.
 // Keep the set small and high-signal for EA / software engineering use.
+// High-confidence mode overlay — appended to the base system prompt when the
+// client sets `confidence_mode: true`. Reverses the default "no hedging"
+// register because for work-grade output, refusing to answer is better than
+// confidently asserting something the context doesn't support.
+const CONFIDENCE_MODE_OVERLAY = `
+
+---
+
+HIGH-CONFIDENCE MODE ACTIVE — STRICT GROUNDING RULES
+
+This response will be reviewed for accuracy and used in a professional setting where hallucinations carry credibility risk. Override your default "direct, no hedging" register with these stricter rules:
+
+1. **Cite every specific claim inline.** Every numerical figure, named entity, specific date, technical detail, quote, or framework name MUST be followed by an italicized source citation, e.g., *(LLM_governance_strategy.md)*. If you cannot cite a specific claim to a chunk in the <context> block, do not make the claim. Rewrite or omit.
+
+2. **Refuse over assert.** When the retrieved context is thin or ambiguous on a specific point, write "The available context does not establish X — I'd suggest verifying against [specific document name]" rather than producing a confident answer. Hedging is the correct register when evidence is thin.
+
+3. **Distinguish facts from synthesis.** Facts directly stated in the chunks get inline citations. Inferences or syntheses combining multiple chunks must be marked: e.g., "Combining these two sources suggests... *(Source A + Source B)*". Do not present synthesis as fact.
+
+4. **No external knowledge.** Do not use general background knowledge from your training to fill gaps in the context. If a topic isn't covered in the chunks, say so explicitly: "The provided context doesn't cover X."
+
+5. **End with a verification checklist.** After the main response, add a final section titled "## Verification checklist" listing every specific claim you made and which source chunk grounds it. Use this format:
+   - "Claim text" — grounded in *(SourceFile.md)*
+   - "Claim text" — INFERRED from two chunks *(SourceA.md + SourceB.md)*
+   - "Claim text" — UNGROUNDED, please verify
+
+This trades brevity for credibility. The reader will use this to spot-check the response before sharing.`;
+
 const SKILLS: Record<string, string> = {
   'architecture-review': `Mode: Architecture Review. Critique the design end-to-end. Structure every response as:
 1. Assumptions you're surfacing (what the user implicitly assumed)
@@ -354,7 +396,8 @@ async function getContext(
   visibility: string[] | undefined,
   mode: AuthMode,
   clientId: string,
-  env: Env
+  env: Env,
+  opts: { sourcePaths?: string[]; topK?: number } = {}
 ): Promise<RetrievedContext> {
   const hydeText = await hyde(query, env);
   const embedding = await embedQuery(hydeText, env);
@@ -362,6 +405,9 @@ async function getContext(
 
   const cleanTopics = (topics ?? [])
     .map((t) => (typeof t === 'string' ? t.trim() : ''))
+    .filter(Boolean);
+  const cleanSourcePaths = (opts.sourcePaths ?? [])
+    .map((s) => (typeof s === 'string' ? s.trim() : ''))
     .filter(Boolean);
 
   const body: any = {
@@ -373,6 +419,8 @@ async function getContext(
   };
   if (cleanTopics.length) body.topics = cleanTopics;
   if (visibility && visibility.length) body.visibility = visibility;
+  if (cleanSourcePaths.length) body.source_paths = cleanSourcePaths;
+  if (opts.topK && opts.topK > 0) body.top_k = opts.topK;
 
   try {
     const r = await fetch(env.RETRIEVE_URL, {
@@ -534,7 +582,8 @@ async function streamFromAnthropic(
   skill: string | undefined,
   mode: ChatRequest['mode'],
   authMode: AuthMode,
-  env: Env
+  env: Env,
+  opts: { confidenceMode?: boolean } = {}
 ): Promise<Response> {
   // Build the system prompt as cacheable blocks. Anthropic's prompt caching
   // (ephemeral, 5-minute TTL) gives ~90% discount on cached input tokens.
@@ -574,6 +623,16 @@ async function streamFromAnthropic(
       text: stable,
       cache_control: { type: 'ephemeral' },
     });
+    // Confidence-mode overlay — appended after the cached base prompt so the
+    // cache hit still applies. The overlay itself is small (~1k tokens), and
+    // its content doesn't change per turn so it caches too on repeat use.
+    if (opts.confidenceMode && authMode === 'owner') {
+      systemBlocks.push({
+        type: 'text',
+        text: CONFIDENCE_MODE_OVERLAY,
+        cache_control: { type: 'ephemeral' },
+      });
+    }
     const contextBlock = context
       .map((c) => `<chunk source="${c.source}">\n${c.text}\n</chunk>`)
       .join('\n\n');
@@ -1228,13 +1287,24 @@ export default {
 
       const clientId = await clientHash(req, env, authMode);
 
+      // High-confidence mode is owner-only (per client convention). Silently
+      // ignore the flag for public-mode requests to avoid leaking the costlier
+      // path to anonymous visitors.
+      const confidenceMode = !!body.confidence_mode && authMode === 'owner';
+
       // Skip RAG retrieval when synthesizing — the chat is the source of truth.
       let chunks: Chunk[] = [];
       if (!synthesizing) {
         const lastUser = [...body.messages].reverse().find((m) => m.role === 'user');
         const query = lastUser?.content ?? '';
         const visibility = authMode === 'public' ? ['public'] : undefined;
-        const ctx = await getContext(query, body.topics, visibility, authMode, clientId, env);
+        const ctx = await getContext(query, body.topics, visibility, authMode, clientId, env, {
+          sourcePaths: body.source_paths,
+          // Confidence mode widens the retrieved chunk count from default 6 → 15.
+          // Source-path filter usually narrows the candidate pool, so a higher K
+          // here still fits comfortably in the prompt budget.
+          topK: confidenceMode ? 15 : undefined,
+        });
         chunks = ctx.chunks;
       }
 
@@ -1244,7 +1314,8 @@ export default {
         body.skill,
         body.mode,
         authMode,
-        env
+        env,
+        { confidenceMode }
       );
       // Merge CORS into the streaming response
       const headers = new Headers(streamResp.headers);

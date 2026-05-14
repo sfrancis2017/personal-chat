@@ -143,6 +143,19 @@
           <span>Library</span>
           <span class="sidebar-library-count" id="sidebar-library-count"></span>
         </summary>
+        <div class="library-search-row">
+          <input
+            type="search"
+            id="library-search"
+            class="library-search"
+            placeholder="Search library…"
+            autocomplete="off"
+          />
+          <div class="library-selection-summary" id="library-selection-summary" hidden>
+            <span id="library-selection-count">0 selected</span>
+            <button type="button" class="library-selection-clear" id="library-selection-clear">Clear</button>
+          </div>
+        </div>
         <div class="sidebar-library-list" id="sidebar-library-list"></div>
       </details>
       <div class="sidebar-foot">
@@ -165,6 +178,19 @@
     <div class="topic-chips" id="topic-chips" hidden aria-label="Filter retrieval by topic">
       <span class="topic-chips-label">Scope</span>
       <div class="topic-chips-row" id="topic-chips-row" role="group"></div>
+    </div>
+
+    <div class="source-chips" id="source-chips" hidden aria-label="Pinned source documents">
+      <span class="source-chips-label">Sources</span>
+      <div class="source-chips-row" id="source-chips-row" role="group"></div>
+    </div>
+
+    <div class="confidence-row" id="confidence-row" aria-label="High-confidence mode toggle">
+      <label class="confidence-toggle">
+        <input type="checkbox" id="confidence-toggle" />
+        <span class="confidence-label-text">High-confidence mode</span>
+        <span class="confidence-hint" title="Wider retrieval (top-K=15), forces source selection, citation-strict prompt, plus a post-generation verification pass that flags ungrounded claims. Slower + costlier per turn — use for work-grade output.">ⓘ</span>
+      </label>
     </div>
 
     <form class="composer" id="composer" autocomplete="off">

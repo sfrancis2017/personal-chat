@@ -33,6 +33,7 @@ import json
 import math
 import os
 import re
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -41,6 +42,7 @@ import psycopg2
 import psycopg2.pool
 from pgvector.psycopg2 import register_vector
 
+import benchmark_job
 import extractors
 import ingest_core
 
@@ -108,6 +110,16 @@ class Handler(BaseHTTPRequestHandler):
             if not self._check_auth():
                 return
             self._handle_library(vis_filter)
+            return
+        if path_only.startswith("/benchmark/status/"):
+            if not self._check_auth():
+                return
+            self._handle_benchmark_status(path_only[len("/benchmark/status/"):])
+            return
+        if path_only.startswith("/benchmark/report/"):
+            if not self._check_auth():
+                return
+            self._handle_benchmark_report(path_only[len("/benchmark/report/"):])
             return
         self._json(404, {"error": "not found"})
 
@@ -184,6 +196,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/ingest":
             self._handle_ingest()
             return
+        if self.path == "/benchmark/start":
+            self._handle_benchmark_start()
+            return
         if self.path != "/retrieve":
             self._json(404, {"error": "not found"})
             return
@@ -212,6 +227,16 @@ class Handler(BaseHTTPRequestHandler):
         elif isinstance(body.get("topic"), str) and body["topic"].strip():
             topic_filter = [body["topic"].strip()]
 
+        # Source-path filter (multi-OR). When set, restrict retrieval to chunks
+        # from these specific sources — used by the chat surface's "pinned
+        # sources" feature for high-confidence grounding.
+        raw_sources = body.get("source_paths")
+        source_paths_filter: list[str] = []
+        if isinstance(raw_sources, list):
+            source_paths_filter = [
+                s for s in raw_sources if isinstance(s, str) and s.strip()
+            ]
+
         # Visibility filter — public mode passes ['public']; owner mode passes None (no filter).
         raw_vis = body.get("visibility")
         vis_filter: list[str] | None = None
@@ -227,14 +252,23 @@ class Handler(BaseHTTPRequestHandler):
         mode: str = body.get("mode") if isinstance(body.get("mode"), str) else "owner"
         client_hash: str | None = body.get("client_hash") if isinstance(body.get("client_hash"), str) else None
 
+        # Optional top_k override (high-confidence mode bumps from default 6 → 15).
+        # Clamp to [1, 30] so a misconfigured client can't blow up the prompt budget.
+        raw_top_k = body.get("top_k")
+        top_k_override: int | None = None
+        if isinstance(raw_top_k, int) and raw_top_k > 0:
+            top_k_override = min(max(raw_top_k, 1), 30)
+
         t_start = time.time()
         conn = _get_conn()
         try:
             chunks, score_map = _hybrid_retrieve(
-                conn, embedding, query_text, topic_filter, vis_filter
+                conn, embedding, query_text, topic_filter, vis_filter,
+                source_paths=source_paths_filter,
             )
             # MMR diversification on the fused candidate set
-            chunks = _mmr_select(chunks, embedding, k=TOP_K, lam=MMR_LAMBDA)
+            k = top_k_override if top_k_override is not None else TOP_K
+            chunks = _mmr_select(chunks, embedding, k=k, lam=MMR_LAMBDA)
             payload_chunks = [
                 {
                     "source_url": c["source_url"],
@@ -279,6 +313,7 @@ def _hybrid_retrieve(
     query_text: str,
     topic_filter: list[str],
     vis_filter: list[str] | None,
+    source_paths: list[str] | None = None,
 ) -> tuple[list[dict], dict]:
     """
     Hybrid retrieval: dense (pgvector cosine) ∪ sparse (Postgres FTS),
@@ -289,11 +324,16 @@ def _hybrid_retrieve(
                   metadata, embedding) up to HYBRID_CANDIDATES, ordered by
                   fused score descending
       score_map:  source_path -> {fused, dense_rank, sparse_rank} for logging
+
+    `source_paths`, when non-empty, restricts retrieval to chunks from those
+    specific source documents — used by the chat surface's "pinned sources"
+    feature for high-confidence grounding.
     """
     cur = conn.cursor()
     vec = _vec_literal(embedding)
 
-    # WHERE clause shared by both halves: active chunks, topic filter, visibility filter
+    # WHERE clause shared by both halves: active chunks, topic filter,
+    # visibility filter, source-path filter
     base_where = ["valid_until IS NULL"]
     base_params: list = []
     if topic_filter:
@@ -302,6 +342,9 @@ def _hybrid_retrieve(
     if vis_filter:
         base_where.append("metadata->>'visibility' = ANY(%s)")
         base_params.append(vis_filter)
+    if source_paths:
+        base_where.append("source_path = ANY(%s)")
+        base_params.append(source_paths)
     where_sql = " AND ".join(base_where)
 
     # Dense half — vector cosine similarity
@@ -593,6 +636,180 @@ def _handle_ingest(self) -> None:
 
 # Bind the handler method to the class
 Handler._handle_ingest = _handle_ingest  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# Benchmark routes — see scripts/benchmark_job.py for the orchestrator.
+# All three are owner-only (Bearer RETRIEVE_TOKEN, same as /ingest).
+# ---------------------------------------------------------------------------
+
+def _handle_benchmark_start(self) -> None:
+    if not self._check_auth():
+        return
+    try:
+        length = int(self.headers.get("Content-Length", "0"))
+        if length <= 0:
+            self._json(400, {"error": "empty body"})
+            return
+        if length > MAX_REQUEST_BYTES:
+            self._json(413, {"error": f"request too large (limit {MAX_REQUEST_BYTES} bytes)"})
+            return
+        raw = self.rfile.read(length)
+        body = json.loads(raw)
+    except Exception:
+        self._json(400, {"error": "invalid json"})
+        return
+
+    filename = body.get("filename")
+    content_b64 = body.get("content_base64")
+    client_hash = body.get("client_hash") or ""
+
+    if not isinstance(filename, str) or not filename.strip():
+        self._json(400, {"error": "filename required"})
+        return
+    if not isinstance(content_b64, str) or not content_b64:
+        self._json(400, {"error": "content_base64 required"})
+        return
+
+    safe_name = _safe_basename(filename)
+    if Path(safe_name).suffix.lower() != ".pdf":
+        self._json(400, {"error": "benchmark requires a PDF (10-K or 10-Q)"})
+        return
+
+    try:
+        content = base64.b64decode(content_b64, validate=True)
+    except Exception:
+        self._json(400, {"error": "content_base64 is not valid base64"})
+        return
+    if len(content) > MAX_UPLOAD_BYTES:
+        self._json(413, {"error": f"file too large: {len(content)} bytes (limit {MAX_UPLOAD_BYTES})"})
+        return
+    if len(content) < 1024:
+        self._json(400, {"error": "file too small to be a valid filing"})
+        return
+
+    conn = _get_conn()
+    try:
+        active = benchmark_job.count_active_jobs(conn)
+        if active >= benchmark_job.MAX_CONCURRENT_JOBS:
+            self._json(429, {
+                "error": "too many active benchmark jobs — try again in a few minutes",
+                "active": active,
+                "limit": benchmark_job.MAX_CONCURRENT_JOBS,
+            })
+            return
+        job_id = benchmark_job.create_job(
+            conn,
+            client_hash=client_hash,
+            content_bytes=content,
+            filename=safe_name,
+        )
+    except Exception as e:
+        self._json(500, {"error": f"create_job failed: {e}"})
+        return
+    finally:
+        POOL.putconn(conn)
+
+    # Background worker thread. Daemon = dies with the process if service restarts;
+    # the job row will be left in a non-terminal state and a cleanup pass should
+    # mark abandoned jobs failed (future work — for now, restart drops in-flight jobs).
+    threading.Thread(
+        target=benchmark_job.run_job,
+        args=(job_id,),
+        name=f"benchmark-{job_id}",
+        daemon=True,
+    ).start()
+
+    self._json(202, {"job_id": job_id, "status": benchmark_job.PENDING})
+
+
+def _handle_benchmark_status(self, job_id_str: str) -> None:
+    try:
+        job_id = int(job_id_str.rstrip("/"))
+    except ValueError:
+        self._json(400, {"error": "invalid job_id"})
+        return
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT status, progress_pct, error_message, company_name, ticker,
+                   cik, sic, form_type, period_end, peer_ciks, created_at, completed_at
+            FROM benchmark_jobs WHERE id = %s
+            """,
+            (job_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            self._json(404, {"error": "job not found"})
+            return
+        (status, pct, err, name, ticker, cik, sic, form, period, peers, created, completed) = row
+        self._json(200, {
+            "job_id": job_id,
+            "status": status,
+            "progress_pct": pct,
+            "error_message": err,
+            "company_name": name,
+            "ticker": ticker,
+            "cik": cik,
+            "sic": sic,
+            "form_type": form,
+            "period_end": period.isoformat() if period else None,
+            "peer_ciks": peers,
+            "created_at": created.isoformat() if created else None,
+            "completed_at": completed.isoformat() if completed else None,
+        })
+    except Exception as e:
+        self._json(500, {"error": f"db: {e}"})
+    finally:
+        POOL.putconn(conn)
+
+
+def _handle_benchmark_report(self, job_id_str: str) -> None:
+    try:
+        job_id = int(job_id_str.rstrip("/"))
+    except ValueError:
+        self._json(400, {"error": "invalid job_id"})
+        return
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT status, report_md, metrics, company_name, peer_ciks, error_message
+            FROM benchmark_jobs WHERE id = %s
+            """,
+            (job_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            self._json(404, {"error": "job not found"})
+            return
+        status, report_md, metrics, name, peers, err = row
+        if status != benchmark_job.DONE:
+            self._json(409, {
+                "error": "job not complete",
+                "status": status,
+                "error_message": err,
+            })
+            return
+        self._json(200, {
+            "job_id": job_id,
+            "report_md": report_md,
+            "metrics": metrics,  # JSONB — psycopg2 returns already-parsed dict
+            "company_name": name,
+            "peer_ciks": peers,
+        })
+    except Exception as e:
+        self._json(500, {"error": f"db: {e}"})
+    finally:
+        POOL.putconn(conn)
+
+
+Handler._handle_benchmark_start = _handle_benchmark_start    # type: ignore[attr-defined]
+Handler._handle_benchmark_status = _handle_benchmark_status  # type: ignore[attr-defined]
+Handler._handle_benchmark_report = _handle_benchmark_report  # type: ignore[attr-defined]
 
 
 def main():
