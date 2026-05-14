@@ -5,12 +5,21 @@ compatibility_flags = ["nodejs_compat"]
 
 # CORS allowed origins. Add localhost for dev; production is the Pages domain.
 [vars]
-ALLOWED_ORIGINS = "https://chat.sajivfrancis.com,https://sajivfrancis.com,https://www.sajivfrancis.com,http://localhost:8000,http://127.0.0.1:8000,http://localhost:4321,http://127.0.0.1:4321"
+ALLOWED_ORIGINS = "https://chat.sajivfrancis.com,https://sajivfrancis.com,https://www.sajivfrancis.com,http://localhost:8000,http://127.0.0.1:8000,http://localhost:4321,http://127.0.0.1:4321,http://localhost:3000,http://127.0.0.1:3000"
 ANTHROPIC_MODEL = "claude-sonnet-4-6"
 
 [[kv_namespaces]]
 binding = "RATE_LIMIT_KV"
 id = "df9b1650caba472d8df576b25b893212"
+
+# Artifact store — persists synthesized whitepaper/slides/email bundles from
+# the chat surface. Work tools READ from /api/artifacts/* endpoints.
+# Create the namespace before first deploy:
+#   npx wrangler kv:namespace create ARTIFACTS_KV
+# Then replace the id below with the value wrangler prints.
+[[kv_namespaces]]
+binding = "ARTIFACTS_KV"
+id = "3acee39af5ef4824b289311f52ad3531"
 
 # Secrets — set via:
 #   cd worker && npx wrangler secret put ANTHROPIC_API_KEY

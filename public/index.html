@@ -72,6 +72,14 @@
             <strong>Synthesize as Slide Deck</strong>
             <span>Claude restructures into presentation slides</span>
           </button>
+          <button type="button" role="menuitem" class="export-menu-item" data-export="synthesize-email">
+            <strong>Synthesize as Email (BLUF)</strong>
+            <span>Bottom-line-up-front executive cover note (~300–500 words)</span>
+          </button>
+          <button type="button" role="menuitem" class="export-menu-item" data-export="synthesize-all">
+            <strong>Synthesize all three (.md downloads)</strong>
+            <span>Whitepaper + Slides + Email — server-orchestrated, ~60s, downloads three .md files</span>
+          </button>
         </div>
       </div>
       <button type="button" id="theme-toggle" aria-label="Toggle theme" class="icon-button">
@@ -242,6 +250,8 @@
         <div class="preview-actions-buttons">
           <button type="button" class="preview-action" id="preview-regenerate" disabled>Regenerate</button>
           <button type="button" class="preview-action" id="preview-edit-toggle" disabled>Edit markdown</button>
+          <button type="button" class="preview-action" id="preview-copy-md" disabled title="Copy raw markdown to clipboard">Copy markdown</button>
+          <button type="button" class="preview-action" id="preview-download-md" disabled title="Download the markdown as a .md file">Download .md</button>
           <button type="button" class="preview-action preview-action-primary" id="preview-save-pdf" disabled>Save as PDF</button>
           <button type="button" class="preview-action preview-action-primary" id="preview-save-ppt" disabled>Save as PPT</button>
           <button type="button" class="preview-action" id="preview-email" disabled title="Compose email with subject + body pre-filled (attach the saved file manually)">Email…</button>

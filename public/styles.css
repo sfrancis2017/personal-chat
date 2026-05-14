@@ -849,11 +849,13 @@ body.sidebar-collapsed .sidebar {
 }
 .mermaid-block svg {
   max-width: 100% !important;
-  width: 100% !important;
   height: auto;
   display: block;
   margin: 0 auto;
   overflow: visible;
+  /* No forced width — let SVG render at viewBox-derived intrinsic size,
+     capped at container width. Small diagrams stay small instead of
+     getting stretched to fill the chat column. */
 }
 
 /* Diagram modal — full-viewport view of a single diagram at natural size */
@@ -1106,6 +1108,26 @@ body.sidebar-collapsed .sidebar {
   justify-content: flex-end;
   margin-top: 0.625rem;
   font-family: var(--font-sans);
+}
+
+/* Bulk-synthesis status toast — bottom-right, non-blocking */
+.synth-all-toast {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  z-index: 60;
+  max-width: 360px;
+  padding: 0.75rem 1rem;
+  background: var(--color-bg-elevated, #1f2937);
+  color: var(--color-fg, #f3f4f6);
+  border: 1px solid var(--color-border, #374151);
+  border-radius: var(--radius-md, 8px);
+  font-family: var(--font-sans);
+  font-size: 0.9rem;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
+}
+.synth-all-toast-error {
+  border-color: #b91c1c;
 }
 .mermaid-action {
   background: transparent;

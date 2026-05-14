@@ -1022,6 +1022,8 @@ const previewStatus = document.getElementById('preview-status');
 const previewCloseBtn = document.getElementById('preview-close');
 const previewRegenBtn = document.getElementById('preview-regenerate');
 const previewEditToggleBtn = document.getElementById('preview-edit-toggle');
+const previewCopyMdBtn = document.getElementById('preview-copy-md');
+const previewDownloadMdBtn = document.getElementById('preview-download-md');
 const previewSavePdfBtn = document.getElementById('preview-save-pdf');
 const previewSavePptBtn = document.getElementById('preview-save-ppt');
 const previewEmailBtn = document.getElementById('preview-email');
@@ -1041,11 +1043,19 @@ const pphTitleEl = document.getElementById('pph-title');
 const pphMetaEl = document.getElementById('pph-meta');
 
 let previewMarkdown = '';
-let previewMode = null; // 'synthesize-whitepaper' | 'synthesize-slides'
+let previewMode = null; // 'synthesize-whitepaper' | 'synthesize-slides' | 'synthesize-email'
 let previewEditing = false;
 
 function setPreviewActionsEnabled(enabled) {
-  [previewRegenBtn, previewEditToggleBtn, previewSavePdfBtn, previewSavePptBtn, previewEmailBtn].forEach((b) => {
+  [
+    previewRegenBtn,
+    previewEditToggleBtn,
+    previewCopyMdBtn,
+    previewDownloadMdBtn,
+    previewSavePdfBtn,
+    previewSavePptBtn,
+    previewEmailBtn,
+  ].forEach((b) => {
     if (b) b.disabled = !enabled;
   });
   // PPT only makes sense for slides mode
@@ -1066,6 +1076,7 @@ function buildExportFilename(kind, ext) {
     'raw-pdf': 'Chat',
     'synthesize-whitepaper': 'Whitepaper',
     'synthesize-slides': 'Slides',
+    'synthesize-email': 'Email',
   };
   const label = labels[kind] ?? 'Export';
   return `Sajiv-Francis-${label}-${title || 'Chat'}-${date}.${ext}`;
@@ -1076,6 +1087,7 @@ function exportEmailSubject() {
   const t = chat?.title ?? 'Chat';
   if (previewMode === 'synthesize-whitepaper') return `Whitepaper: ${t}`;
   if (previewMode === 'synthesize-slides') return `Slide deck: ${t}`;
+  if (previewMode === 'synthesize-email') return `Email: ${t}`;
   return `Chat: ${t}`;
 }
 
@@ -1095,8 +1107,12 @@ function openPreview(mode) {
   // Mode class drives slides-vs-whitepaper print behavior (page breaks).
   previewModal.classList.toggle('mode-slides', mode === 'synthesize-slides');
   previewModal.classList.toggle('mode-whitepaper', mode === 'synthesize-whitepaper');
+  previewModal.classList.toggle('mode-email', mode === 'synthesize-email');
   document.body.style.overflow = 'hidden';
-  previewTitle.textContent = mode === 'synthesize-slides' ? 'Slide deck preview' : 'Whitepaper preview';
+  previewTitle.textContent =
+    mode === 'synthesize-slides' ? 'Slide deck preview' :
+    mode === 'synthesize-email' ? 'Email preview (BLUF)' :
+    'Whitepaper preview';
   previewSubtitle.textContent = '';
   previewStatus.textContent = 'Synthesizing — this may take 10–30 seconds.';
   setPreviewActionsEnabled(false);
@@ -1107,6 +1123,121 @@ function closePreview() {
   document.body.style.overflow = '';
   previewMode = null;
   previewMarkdown = '';
+}
+
+// Trigger a browser download of a markdown string with a derived filename.
+function downloadMarkdown(modeKind, markdown) {
+  const filename = buildExportFilename(modeKind, 'md');
+  const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// Bulk synthesis: calls /api/synthesize/all on the Worker (server-side
+// orchestration runs whitepaper, then slides + email in parallel from the
+// whitepaper). Triggers three downloads when done. ~60s end-to-end.
+async function exportSynthesizeAll() {
+  const chat = getActiveChat();
+  if (!chat || chat.messages.length === 0) {
+    alert('Nothing to synthesize — start a conversation first.');
+    return;
+  }
+  const token = getToken();
+  if (!token) {
+    alert('Owner mode required for synthesis.');
+    return;
+  }
+
+  // Filter to user + assistant turns only — same shape Anthropic expects.
+  const messages = chat.messages
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .map((m) => ({ role: m.role, content: m.content }));
+  if (messages.length === 0) {
+    alert('No messages to synthesize.');
+    return;
+  }
+
+  // Minimal inline status — a corner toast so user sees progress without
+  // blocking the chat UI. Updates in place as the call progresses.
+  const toast = document.createElement('div');
+  toast.className = 'synth-all-toast';
+  toast.textContent = 'Synthesizing all three artifacts… this takes ~60 seconds.';
+  document.body.appendChild(toast);
+
+  const url = API_URL.replace(/\/chat\/?$/, '/api/synthesize/all');
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ messages }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`);
+    }
+    const payload = await res.json();
+    const { whitepaper, slides, email } = payload ?? {};
+    if (!whitepaper || !slides || !email) {
+      throw new Error('Incomplete response from /api/synthesize/all');
+    }
+
+    // Three sequential downloads. Some browsers throttle rapid-fire downloads
+    // — a short stagger improves reliability without noticeable delay.
+    downloadMarkdown('synthesize-whitepaper', whitepaper);
+    setTimeout(() => downloadMarkdown('synthesize-slides', slides), 250);
+    setTimeout(() => downloadMarkdown('synthesize-email', email), 500);
+
+    // Persist to the artifact store so the work tool can pull it later via
+    // GET /api/artifacts. Title derived from the whitepaper's H1 (first line).
+    // Failures here don't undo the downloads — best-effort save with a clear
+    // status message either way.
+    const titleMatch = whitepaper.match(/^#\s+(.+)$/m);
+    const title = (titleMatch ? titleMatch[1] : (chat.title ?? 'Untitled')).trim().slice(0, 300);
+    const saveUrl = API_URL.replace(/\/chat\/?$/, '/api/artifacts');
+    let savedId = null;
+    try {
+      const saveRes = await fetch(saveUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          mode: 'all',
+          title,
+          source_chat_title: chat.title ?? null,
+          artifacts: { whitepaper, slides, email },
+        }),
+      });
+      if (saveRes.ok) {
+        const saved = await saveRes.json();
+        savedId = saved.id;
+      } else {
+        const errText = await saveRes.text();
+        console.warn('Artifact save failed:', saveRes.status, errText.slice(0, 200));
+      }
+    } catch (saveErr) {
+      console.warn('Artifact save error:', saveErr);
+    }
+
+    toast.textContent = savedId
+      ? `Done. Three .md files downloaded. Saved as ${savedId} (available to work tool).`
+      : 'Done. Three .md files downloaded. (Artifact save failed — see console.)';
+    setTimeout(() => toast.remove(), 6000);
+  } catch (err) {
+    toast.textContent = `Synthesis failed: ${err?.message ?? err}`;
+    toast.classList.add('synth-all-toast-error');
+    setTimeout(() => toast.remove(), 6000);
+  }
 }
 
 async function exportSynthesize(mode) {
@@ -1221,6 +1352,44 @@ if (previewEditToggleBtn) {
       previewEditToggleBtn.textContent = 'Edit markdown';
       previewEditing = false;
     }
+  });
+}
+
+// Copy raw markdown to clipboard. Works for any synthesis mode — the
+// markdown source is whatever's currently in previewMarkdown (which respects
+// edits made via the Edit pane).
+if (previewCopyMdBtn) {
+  previewCopyMdBtn.addEventListener('click', async () => {
+    const md = previewEditing && previewEdit ? previewEdit.value : previewMarkdown;
+    if (!md) return;
+    try {
+      await navigator.clipboard.writeText(md);
+      const prev = previewCopyMdBtn.textContent;
+      previewCopyMdBtn.textContent = 'Copied ✓';
+      setTimeout(() => (previewCopyMdBtn.textContent = prev), 1500);
+    } catch {
+      previewCopyMdBtn.textContent = 'Copy failed';
+      setTimeout(() => (previewCopyMdBtn.textContent = 'Copy markdown'), 1500);
+    }
+  });
+}
+
+// Download raw markdown as a .md file. Filename matches the existing PDF
+// naming convention so all three exports (PDF, PPT, MD) feel related.
+if (previewDownloadMdBtn) {
+  previewDownloadMdBtn.addEventListener('click', () => {
+    const md = previewEditing && previewEdit ? previewEdit.value : previewMarkdown;
+    if (!md) return;
+    const filename = buildExportFilename(previewMode ?? 'synthesize-whitepaper', 'md');
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
 }
 
@@ -1581,6 +1750,8 @@ if (exportTriggerBtn && exportMenuEl) {
     if (action === 'raw-pdf') exportRawPdf();
     else if (action === 'synthesize-whitepaper') exportSynthesize('synthesize-whitepaper');
     else if (action === 'synthesize-slides') exportSynthesize('synthesize-slides');
+    else if (action === 'synthesize-email') exportSynthesize('synthesize-email');
+    else if (action === 'synthesize-all') exportSynthesizeAll();
   });
   document.addEventListener('click', (e) => {
     if (!exportMenuEl.hidden && !exportMenuEl.contains(e.target) && e.target !== exportTriggerBtn) {
