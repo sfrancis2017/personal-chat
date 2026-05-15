@@ -29,6 +29,11 @@ interface Env {
   // input exceeds 175k tokens. Leave unset to cap at 200k context (current
   // behavior). Pricing tier: ~2× standard input for prompts > 200k tokens.
   ANTHROPIC_BETA_1M?: string;
+  // GitHub PAT with contents:write on sfrancis2017/docs (fine-grained, single-repo).
+  // Used by POST /publish-to-docs to commit synthesized whitepapers (refs stripped,
+  // rewritten to first-person) into the docs site's /analysis/ section.
+  // If unset, /publish-to-docs returns 503.
+  DOCS_GITHUB_TOKEN?: string;
 }
 
 // Constant-time string comparison to avoid timing attacks on token check
@@ -609,6 +614,146 @@ async function synthesize(
   return text;
 }
 
+// ---- Publish-to-docs helpers ---------------------------------------------
+//
+// docs.sajivfrancis.com gets a clean "Sajiv's own analysis" view of
+// synthesized whitepapers. The artifact store retains the full version
+// (with references) for work-tool consumption — these helpers transform
+// only on the publish path.
+
+const DOCS_REPO = 'sfrancis2017/docs';
+const DOCS_BRANCH = 'main';
+const DOCS_PATH_PREFIX = 'src/content/docs/analysis';
+
+// 1. Strip references — inline citations + Sources Consulted + Verification
+// checklist sections. Leave diagram contents alone (citations inside Mermaid
+// node labels are rare and removing them risks breaking diagram syntax).
+function stripReferences(md: string): string {
+  let out = md;
+  // Inline citations like *(Book — chapter)* or *(SourceFile.md)*. The
+  // pattern is italicized parenthetical: asterisk, paren, content, paren,
+  // asterisk. Strip with any leading whitespace so periods sit clean.
+  out = out.replace(/\s*\*\([^)]*\)\*/g, '');
+  // ## Sources Consulted (or ## Sources) — everything until the next H2/H1 or EOF
+  out = out.replace(
+    /\n##\s+Sources(?:\s+Consulted)?\b[\s\S]*?(?=\n##\s|\n#\s|$)/gi,
+    '\n'
+  );
+  // ## Verification checklist — internal review aid, not public
+  out = out.replace(
+    /\n##\s+Verification\s+checklist\b[\s\S]*?(?=\n##\s|\n#\s|$)/gi,
+    '\n'
+  );
+  // Normalize: collapse 3+ blank lines to 2, trim trailing whitespace
+  out = out.replace(/\n{3,}/g, '\n\n').trim() + '\n';
+  return out;
+}
+
+// 2. Rewrite from third-person ("Sajiv argues") to first-person ("I argue").
+// Uses Haiku — this is a mechanical voice transformation, doesn't need Sonnet.
+// One Anthropic call. Preserves all content, structure, diagrams, citations.
+async function rewriteToFirstPerson(md: string, env: Env): Promise<string> {
+  const haikuModel = env.ANTHROPIC_HAIKU_MODEL ?? 'claude-haiku-4-5-20251001';
+  const system = `You are rewriting a markdown whitepaper from third-person to first-person voice.
+
+The original was written ABOUT Sajiv Francis (the author). You are rewriting it as if Sajiv is publishing it himself on his personal site.
+
+Rules:
+1. Change "Sajiv" → "I" (and "Sajiv's" → "my", "him" → "me", "his" → "my", "he" → "I" when referring to Sajiv).
+2. Adjust verb conjugation accordingly ("Sajiv argues" → "I argue", "Sajiv has worked" → "I have worked").
+3. Preserve ALL other content EXACTLY: headings, bold/italic emphasis, paragraph structure, bullet points, numbered lists, tables, code blocks, Mermaid diagrams (inside \`\`\`mermaid fences), images, links, frontmatter.
+4. Do NOT add new content, do NOT change meaning, do NOT summarize or shorten.
+5. If a sentence does not refer to Sajiv, leave it EXACTLY as-is.
+6. Output the rewritten markdown ONLY — no preamble, no commentary, no "Here is the rewritten version:".`;
+
+  const body = JSON.stringify({
+    model: haikuModel,
+    max_tokens: 16384,
+    system,
+    messages: [{ role: 'user', content: md }],
+  });
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'anthropic-version': '2023-06-01',
+      'x-api-key': env.ANTHROPIC_API_KEY,
+    },
+    body,
+  });
+  if (!r.ok) {
+    throw new Error(`Voice rewrite failed: HTTP ${r.status} ${(await r.text()).slice(0, 200)}`);
+  }
+  const data: any = await r.json();
+  const text = data?.content?.[0]?.text;
+  if (typeof text !== 'string' || text.length === 0) {
+    throw new Error('Voice rewrite returned empty content');
+  }
+  return text;
+}
+
+// 3. Commit a file to the docs repo. Uses GitHub's Contents API — supports
+// both create (no sha) and update (with sha of existing file). Returns the
+// resulting commit + html URL so the caller can show the user where it landed.
+async function publishToGithub(
+  filePath: string,
+  content: string,
+  commitMessage: string,
+  env: Env
+): Promise<{ html_url: string; commit_sha: string; path: string }> {
+  if (!env.DOCS_GITHUB_TOKEN) {
+    throw new Error('DOCS_GITHUB_TOKEN not configured on worker');
+  }
+  const apiUrl = `https://api.github.com/repos/${DOCS_REPO}/contents/${filePath}`;
+  const ghHeaders: HeadersInit = {
+    Authorization: `Bearer ${env.DOCS_GITHUB_TOKEN}`,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    // GitHub requires a User-Agent on all requests
+    'User-Agent': 'chat-worker-publish/1.0',
+  };
+
+  // GET first to find existing SHA (required for update; absent for create)
+  let existingSha: string | undefined;
+  try {
+    const getRes = await fetch(`${apiUrl}?ref=${DOCS_BRANCH}`, { headers: ghHeaders });
+    if (getRes.ok) {
+      const existing: any = await getRes.json();
+      existingSha = existing.sha;
+    }
+    // 404 here is expected for a new file — fall through to PUT
+  } catch {
+    // Network blip — fall through to PUT; if file exists we'll get a 422
+    // and the caller can retry.
+  }
+
+  // Base64-encode the markdown body. Use a Latin1-safe roundtrip so
+  // non-ASCII chars (em-dashes, smart quotes, accented names) survive.
+  const contentB64 = btoa(unescape(encodeURIComponent(content)));
+  const body: Record<string, any> = {
+    message: commitMessage,
+    content: contentB64,
+    branch: DOCS_BRANCH,
+  };
+  if (existingSha) body.sha = existingSha;
+
+  const putRes = await fetch(apiUrl, {
+    method: 'PUT',
+    headers: { ...ghHeaders, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!putRes.ok) {
+    const errText = await putRes.text();
+    throw new Error(`GitHub commit failed: HTTP ${putRes.status} ${errText.slice(0, 400)}`);
+  }
+  const result: any = await putRes.json();
+  return {
+    html_url: result.content?.html_url ?? '',
+    commit_sha: result.commit?.sha ?? '',
+    path: filePath,
+  };
+}
+
 async function streamFromAnthropic(
   messages: ChatMessage[],
   context: Chunk[],
@@ -1099,6 +1244,119 @@ export default {
       } catch (e: any) {
         return new Response(
           JSON.stringify({ error: String(e?.message ?? e), elapsed_ms: Date.now() - start }),
+          { status: 502, headers: { 'Content-Type': 'application/json', ...cors } }
+        );
+      }
+    }
+
+    // ---- Publish to docs.sajivfrancis.com (owner-only) -------------------
+    //
+    // Single source of truth: synthesized whitepapers are stored in the
+    // artifact store WITH references (inline citations + Sources section)
+    // for work-tool verification. The publish endpoint transforms on the
+    // way out — strips references, rewrites third-person to first-person
+    // via Haiku, commits to sfrancis2017/docs at src/content/docs/analysis/
+    // <slug>.md so the docs site reads as Sajiv's own analysis.
+    //
+    // Body: { title, slug, summary, markdown }
+    //   - markdown: the current preview content (respects any edits)
+    //   - slug: lowercase-hyphenated, validated server-side
+    //
+    // Returns the GitHub commit info so the UI can link to the result.
+
+    if (url.pathname === '/publish-to-docs' && req.method === 'POST') {
+      if (!isAuthorized(req, env)) {
+        return new Response(JSON.stringify({ error: 'unauthorized' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      if (!env.DOCS_GITHUB_TOKEN) {
+        return new Response(
+          JSON.stringify({
+            error: 'DOCS_GITHUB_TOKEN not configured on worker — set via `wrangler secret put DOCS_GITHUB_TOKEN`',
+          }),
+          { status: 503, headers: { 'Content-Type': 'application/json', ...cors } }
+        );
+      }
+      let body: any;
+      try {
+        body = await req.json();
+      } catch {
+        return new Response(JSON.stringify({ error: 'invalid json' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+
+      const title = typeof body.title === 'string' ? body.title.trim().slice(0, 300) : '';
+      const slug = typeof body.slug === 'string' ? body.slug.trim() : '';
+      const summary = typeof body.summary === 'string' ? body.summary.trim().slice(0, 500) : '';
+      const markdown = typeof body.markdown === 'string' ? body.markdown : '';
+      if (!title) {
+        return new Response(JSON.stringify({ error: 'title required' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      if (!slug || !/^[a-z0-9][a-z0-9-]{1,80}$/.test(slug)) {
+        return new Response(
+          JSON.stringify({
+            error: 'slug must be lowercase, alphanumeric + hyphens, 2-81 chars',
+          }),
+          { status: 400, headers: { 'Content-Type': 'application/json', ...cors } }
+        );
+      }
+      if (!markdown || markdown.length < 100) {
+        return new Response(
+          JSON.stringify({ error: 'markdown body required (min 100 chars)' }),
+          { status: 400, headers: { 'Content-Type': 'application/json', ...cors } }
+        );
+      }
+
+      const start = Date.now();
+      try {
+        // 1. Strip references (inline citations + Sources/Verification sections)
+        const stripped = stripReferences(markdown);
+        // 2. Rewrite third-person → first-person (Haiku, ~$0.02 per call)
+        const firstPerson = await rewriteToFirstPerson(stripped, env);
+        // 3. Build frontmatter
+        const now = new Date();
+        const frontmatter =
+          '---\n' +
+          `title: ${JSON.stringify(title)}\n` +
+          `description: ${JSON.stringify(summary || title)}\n` +
+          'chat-published: true\n' +
+          `published-at: ${now.toISOString()}\n` +
+          `chat-corpus-snapshot: ${now.toISOString().slice(0, 10)}\n` +
+          '---\n\n';
+        const final = frontmatter + firstPerson;
+        // 4. Commit to GitHub
+        const filePath = `${DOCS_PATH_PREFIX}/${slug}.md`;
+        const result = await publishToGithub(
+          filePath,
+          final,
+          `Add analysis: ${title}`,
+          env
+        );
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            slug,
+            path: result.path,
+            github_url: result.html_url,
+            commit_sha: result.commit_sha,
+            docs_url: `https://docs.sajivfrancis.com/analysis/${slug}`,
+            elapsed_ms: Date.now() - start,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json', ...cors } }
+        );
+      } catch (e: any) {
+        return new Response(
+          JSON.stringify({
+            error: String(e?.message ?? e),
+            elapsed_ms: Date.now() - start,
+          }),
           { status: 502, headers: { 'Content-Type': 'application/json', ...cors } }
         );
       }

@@ -260,6 +260,45 @@
       <div class="diagram-modal-content" id="diagram-modal-content"></div>
     </div>
 
+    <!-- Publish-to-docs modal. Opens from the "Publish to docs" button on the
+         whitepaper preview. Sends the current preview markdown (with edits) to
+         /publish-to-docs on the worker — server strips refs + rewrites voice +
+         commits to sfrancis2017/docs at /analysis/<slug>.md. -->
+    <div class="publish-docs-modal" id="publish-docs-modal" hidden role="dialog" aria-modal="true" aria-label="Publish to docs">
+      <div class="publish-docs-card">
+        <header class="publish-docs-header">
+          <h2 class="publish-docs-title">Publish to docs.sajivfrancis.com</h2>
+          <button type="button" class="publish-docs-close" id="publish-docs-close" aria-label="Close">×</button>
+        </header>
+        <form class="publish-docs-form" id="publish-docs-form">
+          <label class="publish-docs-field">
+            <span>Title</span>
+            <input type="text" id="publish-docs-title-input" required maxlength="200" autocomplete="off" />
+            <span class="publish-docs-hint">Shows as the page heading. Pre-filled from your whitepaper's H1.</span>
+          </label>
+          <label class="publish-docs-field">
+            <span>Slug</span>
+            <input type="text" id="publish-docs-slug" required maxlength="80" pattern="[a-z0-9][a-z0-9-]{1,79}" autocomplete="off" />
+            <span class="publish-docs-hint">URL path. Lowercase, hyphens. Lands at <code>docs.sajivfrancis.com/analysis/&lt;slug&gt;</code>.</span>
+          </label>
+          <label class="publish-docs-field">
+            <span>Summary <em class="publish-docs-optional">(optional, shown in docs index)</em></span>
+            <textarea id="publish-docs-summary" rows="2" maxlength="500"></textarea>
+          </label>
+          <div class="publish-docs-info">
+            On publish: inline citations + "Sources Consulted" + "Verification checklist" sections are stripped.
+            Third-person ("Sajiv argues…") is rewritten to first-person ("I argue…") via Haiku.
+            Mermaid diagrams left untouched. ~15-30 seconds total.
+          </div>
+          <div class="publish-docs-status" id="publish-docs-status" aria-live="polite"></div>
+          <div class="publish-docs-actions">
+            <button type="button" id="publish-docs-cancel" class="preview-action">Cancel</button>
+            <button type="submit" id="publish-docs-submit" class="preview-action preview-action-primary">Publish</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <!-- Bulk synthesis processing + confirmation modal. Replaces the old corner
          toast for "Synthesize all three" — stays open until user dismisses, shows
          clear save confirmation + artifact id + fetchable endpoint URL. -->
@@ -325,6 +364,7 @@
           <button type="button" class="preview-action" id="preview-copy-md" disabled title="Copy raw markdown to clipboard">Copy markdown</button>
           <button type="button" class="preview-action" id="preview-download-md" disabled title="Download the markdown as a .md file">Download .md</button>
           <button type="button" class="preview-action" id="preview-save-artifact" disabled title="Persist the current markdown (with any edits) to /api/artifacts so the work tool can fetch it">Save to artifacts</button>
+          <button type="button" class="preview-action" id="preview-publish-docs" disabled hidden title="Publish a cleaned, first-person version to docs.sajivfrancis.com — references stripped, voice rewritten">Publish to docs</button>
           <button type="button" class="preview-action preview-action-primary" id="preview-save-pdf" disabled>Save as PDF</button>
           <button type="button" class="preview-action preview-action-primary" id="preview-save-ppt" disabled>Save as PPT</button>
           <button type="button" class="preview-action" id="preview-email" disabled title="Compose email with subject + body pre-filled (attach the saved file manually)">Email…</button>

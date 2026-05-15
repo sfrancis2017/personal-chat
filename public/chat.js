@@ -1647,6 +1647,7 @@ const previewEditToggleBtn = document.getElementById('preview-edit-toggle');
 const previewCopyMdBtn = document.getElementById('preview-copy-md');
 const previewDownloadMdBtn = document.getElementById('preview-download-md');
 const previewSaveArtifactBtn = document.getElementById('preview-save-artifact');
+const previewPublishDocsBtn = document.getElementById('preview-publish-docs');
 const previewSavePdfBtn = document.getElementById('preview-save-pdf');
 const previewSavePptBtn = document.getElementById('preview-save-ppt');
 const previewEmailBtn = document.getElementById('preview-email');
@@ -1676,6 +1677,7 @@ function setPreviewActionsEnabled(enabled) {
     previewCopyMdBtn,
     previewDownloadMdBtn,
     previewSaveArtifactBtn,
+    previewPublishDocsBtn,
     previewSavePdfBtn,
     previewSavePptBtn,
     previewEmailBtn,
@@ -1685,6 +1687,13 @@ function setPreviewActionsEnabled(enabled) {
   // PPT only makes sense for slides mode
   if (previewSavePptBtn) {
     previewSavePptBtn.disabled = !enabled || previewMode !== 'synthesize-slides';
+  }
+  // Publish-to-docs only available for whitepaper mode (slides + email don't
+  // belong on the docs site; bulk "all" doesn't open the preview).
+  if (previewPublishDocsBtn) {
+    const showPublish = previewMode === 'synthesize-whitepaper';
+    previewPublishDocsBtn.hidden = !showPublish;
+    previewPublishDocsBtn.disabled = !enabled || !showPublish;
   }
 }
 
@@ -2154,6 +2163,162 @@ if (previewSaveArtifactBtn) {
         previewSaveArtifactBtn.textContent = originalText;
         previewSaveArtifactBtn.disabled = false;
       }, 3000);
+    }
+  });
+}
+
+// ---- Publish-to-docs modal -----------------------------------------------
+//
+// Opens from the "Publish to docs" button on the whitepaper preview.
+// Posts the current preview markdown (with any edits) to /publish-to-docs
+// on the worker. Server strips references + rewrites to first-person via
+// Haiku + commits to sfrancis2017/docs/src/content/docs/analysis/<slug>.md.
+// Modal shows progress + result with link to the GitHub commit + docs URL.
+
+const publishDocsModal = document.getElementById('publish-docs-modal');
+const publishDocsForm = document.getElementById('publish-docs-form');
+const publishDocsTitleInput = document.getElementById('publish-docs-title-input');
+const publishDocsSlug = document.getElementById('publish-docs-slug');
+const publishDocsSummary = document.getElementById('publish-docs-summary');
+const publishDocsStatus = document.getElementById('publish-docs-status');
+const publishDocsSubmit = document.getElementById('publish-docs-submit');
+const publishDocsCancel = document.getElementById('publish-docs-cancel');
+const publishDocsClose = document.getElementById('publish-docs-close');
+
+function slugify(text) {
+  return (text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+}
+
+function openPublishDocsModal() {
+  if (!publishDocsModal) return;
+  // Pre-fill title from current preview markdown's H1
+  const titleMatch = previewMarkdown.match(/^#\s+(.+)$/m);
+  const title = (titleMatch ? titleMatch[1] : (getActiveChat()?.title ?? '')).trim();
+  if (publishDocsTitleInput) publishDocsTitleInput.value = title.slice(0, 200);
+  if (publishDocsSlug) publishDocsSlug.value = slugify(title);
+  if (publishDocsSummary) publishDocsSummary.value = '';
+  if (publishDocsStatus) {
+    publishDocsStatus.textContent = '';
+    publishDocsStatus.className = 'publish-docs-status';
+  }
+  publishDocsSubmit.disabled = false;
+  publishDocsCancel.disabled = false;
+  publishDocsModal.hidden = false;
+  document.body.style.overflow = 'hidden';
+  setTimeout(() => publishDocsTitleInput?.focus(), 50);
+}
+
+function closePublishDocsModal() {
+  if (!publishDocsModal) return;
+  publishDocsModal.hidden = true;
+  document.body.style.overflow = '';
+}
+
+// Keep slug in sync if user hasn't manually edited it. Heuristic: auto-update
+// the slug as long as it matches the slugified title; once user diverges,
+// stop tracking.
+let publishDocsSlugAutoTrack = true;
+if (publishDocsTitleInput && publishDocsSlug) {
+  publishDocsTitleInput.addEventListener('input', () => {
+    if (publishDocsSlugAutoTrack) {
+      publishDocsSlug.value = slugify(publishDocsTitleInput.value);
+    }
+  });
+  publishDocsSlug.addEventListener('input', () => {
+    // If user diverges from auto-slugified title, stop tracking
+    if (publishDocsSlug.value !== slugify(publishDocsTitleInput.value)) {
+      publishDocsSlugAutoTrack = false;
+    }
+  });
+}
+
+if (previewPublishDocsBtn) {
+  previewPublishDocsBtn.addEventListener('click', () => {
+    if (!previewMarkdown) return;
+    publishDocsSlugAutoTrack = true;
+    openPublishDocsModal();
+  });
+}
+if (publishDocsCancel) publishDocsCancel.addEventListener('click', closePublishDocsModal);
+if (publishDocsClose) publishDocsClose.addEventListener('click', closePublishDocsModal);
+if (publishDocsModal) {
+  publishDocsModal.addEventListener('click', (e) => {
+    if (e.target === publishDocsModal) closePublishDocsModal();
+  });
+}
+
+if (publishDocsForm) {
+  publishDocsForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const token = getToken();
+    if (!token) {
+      publishDocsStatus.textContent = 'Owner mode required.';
+      publishDocsStatus.className = 'publish-docs-status publish-docs-status-error';
+      return;
+    }
+    const title = publishDocsTitleInput.value.trim();
+    const slug = publishDocsSlug.value.trim();
+    const summary = publishDocsSummary.value.trim();
+    if (!title) {
+      publishDocsStatus.textContent = 'Title is required.';
+      publishDocsStatus.className = 'publish-docs-status publish-docs-status-error';
+      return;
+    }
+    if (!/^[a-z0-9][a-z0-9-]{1,79}$/.test(slug)) {
+      publishDocsStatus.textContent = 'Slug must be lowercase letters, numbers, and hyphens (2–80 chars).';
+      publishDocsStatus.className = 'publish-docs-status publish-docs-status-error';
+      return;
+    }
+    const md = previewEditing && previewEdit ? previewEdit.value : previewMarkdown;
+    if (!md || md.length < 100) {
+      publishDocsStatus.textContent = 'Whitepaper too short — synthesize first.';
+      publishDocsStatus.className = 'publish-docs-status publish-docs-status-error';
+      return;
+    }
+
+    publishDocsSubmit.disabled = true;
+    publishDocsCancel.disabled = true;
+    publishDocsStatus.textContent = 'Stripping references → rewriting to first-person → committing to GitHub… (~20s)';
+    publishDocsStatus.className = 'publish-docs-status';
+
+    const url = API_URL.replace(/\/chat\/?$/, '/publish-to-docs');
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ title, slug, summary, markdown: md }),
+      });
+      const text = await res.text();
+      let body = {};
+      try { body = JSON.parse(text); } catch {}
+      if (!res.ok) {
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      publishDocsStatus.innerHTML =
+        `Published ✓ ` +
+        (body.docs_url
+          ? `<a href="${body.docs_url}" target="_blank" rel="noopener">${body.docs_url}</a>`
+          : '') +
+        ` <br><span class="publish-docs-hint">Commit: ` +
+        (body.github_url
+          ? `<a href="${body.github_url}" target="_blank" rel="noopener">${(body.commit_sha || '').slice(0, 7)}</a>`
+          : (body.commit_sha || '').slice(0, 7)) +
+        `</span>`;
+      publishDocsStatus.className = 'publish-docs-status publish-docs-status-success';
+      publishDocsCancel.disabled = false;
+      // Leave modal open so user can copy the URL; close button or Cancel dismisses.
+    } catch (err) {
+      publishDocsStatus.textContent = `Publish failed: ${err?.message ?? err}`;
+      publishDocsStatus.className = 'publish-docs-status publish-docs-status-error';
+      publishDocsSubmit.disabled = false;
+      publishDocsCancel.disabled = false;
     }
   });
 }

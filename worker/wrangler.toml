@@ -34,3 +34,12 @@ id = "3acee39af5ef4824b289311f52ad3531"
 # (paste the current beta name from Anthropic docs, e.g.
 #  "context-1m-2025-08-07" — check console.anthropic.com for the
 #  current dated value at time of enabling.)
+#
+# Optional: GitHub PAT for the "Publish to docs" feature. Needed for
+# POST /publish-to-docs to commit synthesized whitepapers (refs stripped,
+# rewritten to first-person via Haiku) into sfrancis2017/docs at
+# src/content/docs/analysis/<slug>.md. When unset, /publish-to-docs
+# returns 503 with a config hint.
+#   cd worker && npx wrangler secret put DOCS_GITHUB_TOKEN
+# (paste a fine-grained PAT with contents:write scoped to the docs repo
+#  only — generate at github.com/settings/personal-access-tokens.)

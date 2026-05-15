@@ -2053,6 +2053,130 @@ body.sidebar-collapsed .sidebar {
   }
 }
 
+/* ---- Publish-to-docs modal --------------------------------------------- */
+/* Compact form modal opened from the whitepaper preview. Mirrors upload-modal
+   visual language so it feels like part of the same family. */
+.publish-docs-modal[hidden] { display: none; }
+.publish-docs-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+.publish-docs-card {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  width: 100%;
+  max-width: 560px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+}
+.publish-docs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem 0.5rem;
+}
+.publish-docs-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--color-fg);
+}
+.publish-docs-close {
+  background: transparent;
+  border: none;
+  color: var(--color-fg-muted);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.publish-docs-form {
+  padding: 0.5rem 1.25rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.publish-docs-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.publish-docs-field > span:first-child {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-fg);
+}
+.publish-docs-optional {
+  font-weight: 400;
+  font-style: italic;
+  color: var(--color-fg-muted);
+}
+.publish-docs-field input,
+.publish-docs-field textarea {
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0.45rem 0.6rem;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-family: var(--font-sans);
+}
+.publish-docs-field input:focus,
+.publish-docs-field textarea:focus {
+  outline: none;
+  border-color: var(--color-accent, #1565c0);
+}
+.publish-docs-hint {
+  font-size: 0.7rem;
+  color: var(--color-fg-muted);
+}
+.publish-docs-hint code {
+  background: var(--color-bg);
+  padding: 0.05rem 0.25rem;
+  border-radius: 3px;
+  font-size: 0.95em;
+}
+.publish-docs-info {
+  font-size: 0.75rem;
+  color: var(--color-fg-muted);
+  background: var(--color-bg);
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--radius-md);
+  border-left: 3px solid var(--color-accent, #1565c0);
+  line-height: 1.5;
+}
+.publish-docs-status {
+  font-size: 0.85rem;
+  color: var(--color-fg-muted);
+  padding: 0.3rem 0;
+  min-height: 1.5rem;
+}
+.publish-docs-status-error {
+  color: #b45309;
+}
+.publish-docs-status-success {
+  color: #15803d;
+  word-break: break-all;
+}
+.publish-docs-status-success a {
+  color: var(--color-accent, #1565c0);
+}
+.publish-docs-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
 /* Print header in preview is hidden on screen */
 .preview-print-header { display: none; }
 
