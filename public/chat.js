@@ -2278,38 +2278,91 @@ const publishDocsCancel = document.getElementById('publish-docs-cancel');
 const publishDocsClose = document.getElementById('publish-docs-close');
 
 // Fetch the docs site's section directories so the user can choose where
-// to publish (analysis, solution-architecture, frameworks, etc.). Called
-// when the publish modal opens. Falls back to ["analysis"] on any failure
-// so the modal still works in a degraded state.
+// to publish. Worker returns a flat list of paths, e.g.:
+//   ["ai", "ai/agents-and-tools", "architecture",
+//    "architecture/solution-architecture", "reference", ...]
+// We render these grouped into <optgroup> elements by top-level section
+// for a usable dropdown when the site has many nested sub-sections.
 async function loadDocsSections() {
   if (!publishDocsSection) return;
   const token = getToken();
   if (!token) return;
-  // Preserve the current selection if user had picked one
   const previousValue = publishDocsSection.value;
   const url = API_URL.replace(/\/chat\/?$/, '/publish-to-docs/sections');
+  let sections = [];
+  let errorMsg = null;
   try {
     const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     const body = await res.json().catch(() => ({}));
-    const sections = Array.isArray(body.sections) && body.sections.length > 0
-      ? body.sections
-      : ['analysis'];
+    if (Array.isArray(body.sections) && body.sections.length > 0) {
+      sections = body.sections;
+    }
+    if (body.error) errorMsg = String(body.error);
+  } catch (err) {
+    errorMsg = err?.message ?? String(err);
+  }
+  if (sections.length === 0) {
+    // Surface the error in the dropdown so the user knows fetching failed
+    // (instead of silently looking like the docs repo only has "analysis").
     publishDocsSection.innerHTML = '';
-    for (const s of sections) {
+    const opt = document.createElement('option');
+    opt.value = 'analysis';
+    opt.textContent = errorMsg
+      ? `analysis (sections fetch failed — see console)`
+      : 'analysis';
+    publishDocsSection.appendChild(opt);
+    if (errorMsg) console.warn('Sections fetch failed:', errorMsg);
+    return;
+  }
+
+  // Group sections by top-level prefix for optgroup rendering. Top-level
+  // sections that have nested children get rendered as an optgroup label;
+  // top-level sections without children render as flat options.
+  const byTop = new Map();
+  for (const path of sections) {
+    const parts = path.split('/');
+    const top = parts[0];
+    if (!byTop.has(top)) byTop.set(top, { topPath: null, children: [] });
+    const entry = byTop.get(top);
+    if (parts.length === 1) entry.topPath = path;            // top-level itself
+    else entry.children.push(path);                          // nested child
+  }
+
+  publishDocsSection.innerHTML = '';
+  for (const [top, entry] of [...byTop.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    if (entry.children.length === 0) {
+      // No nested children — flat option at the top level
+      if (entry.topPath) {
+        const opt = document.createElement('option');
+        opt.value = entry.topPath;
+        opt.textContent = entry.topPath;
+        publishDocsSection.appendChild(opt);
+      }
+      continue;
+    }
+    // Has nested children — render as an <optgroup>, with the top-level
+    // path itself as the first option so user can pick e.g. "architecture"
+    // directly (not just a sub-section).
+    const group = document.createElement('optgroup');
+    group.label = top;
+    if (entry.topPath) {
       const opt = document.createElement('option');
-      opt.value = s;
-      opt.textContent = s;
-      publishDocsSection.appendChild(opt);
+      opt.value = entry.topPath;
+      opt.textContent = `${top} (top-level)`;
+      group.appendChild(opt);
     }
-    // Restore previous selection if still present, else default to "analysis"
-    // if it exists, else the first option.
-    if (previousValue && sections.includes(previousValue)) {
-      publishDocsSection.value = previousValue;
-    } else if (sections.includes('analysis')) {
-      publishDocsSection.value = 'analysis';
+    for (const child of entry.children.sort()) {
+      const opt = document.createElement('option');
+      opt.value = child;
+      opt.textContent = child.replace(top + '/', '└── ');
+      group.appendChild(opt);
     }
-  } catch {
-    // Network error — leave the hardcoded "analysis" option in place
+    publishDocsSection.appendChild(group);
+  }
+
+  // Restore previous selection if still in the list
+  if (previousValue && sections.includes(previousValue)) {
+    publishDocsSection.value = previousValue;
   }
 }
 
@@ -2406,7 +2459,9 @@ if (publishDocsForm) {
       publishDocsStatus.className = 'publish-docs-status publish-docs-status-error';
       return;
     }
-    if (!/^[a-z0-9][a-z0-9-]{0,60}$/.test(section)) {
+    // Match worker's relaxed validator: top-level OR one nested level
+    // ("architecture/solution-architecture")
+    if (!/^[a-z0-9][a-z0-9-]{0,60}(\/[a-z0-9][a-z0-9-]{0,60})?$/.test(section)) {
       publishDocsStatus.textContent = 'Section invalid — pick from the dropdown.';
       publishDocsStatus.className = 'publish-docs-status publish-docs-status-error';
       return;

@@ -34,6 +34,12 @@ interface Env {
   // rewritten to first-person) into the docs site's /analysis/ section.
   // If unset, /publish-to-docs returns 503.
   DOCS_GITHUB_TOKEN?: string;
+  // Optional overrides for the docs repo layout — set in wrangler.toml [vars]
+  // if your docs site doesn't match Starlight's default `src/content/docs/`
+  // structure (e.g. Astro vanilla uses `src/pages/docs`, MkDocs uses `docs`).
+  DOCS_REPO?: string;          // default: "sfrancis2017/docs"
+  DOCS_BRANCH?: string;        // default: "main"
+  DOCS_CONTENT_ROOT?: string;  // default: "src/content/docs"
 }
 
 // Constant-time string comparison to avoid timing attacks on token check
@@ -625,9 +631,23 @@ async function synthesize(
 // (with references) for work-tool consumption — these helpers transform
 // only on the publish path.
 
-const DOCS_REPO = 'sfrancis2017/docs';
-const DOCS_BRANCH = 'main';
-const DOCS_CONTENT_ROOT = 'src/content/docs';
+// Docs repo config — defaults assume Starlight on sfrancis2017/docs at main.
+// Override via wrangler.toml [vars] if your repo uses a different layout
+// (e.g. Astro vanilla 'src/pages/docs', MkDocs 'docs', etc.) without
+// needing a code redeploy.
+const DOCS_REPO_DEFAULT = 'sfrancis2017/docs';
+const DOCS_BRANCH_DEFAULT = 'main';
+const DOCS_CONTENT_ROOT_DEFAULT = 'src/content/docs';
+
+function docsRepo(env: Env): string {
+  return env.DOCS_REPO?.trim() || DOCS_REPO_DEFAULT;
+}
+function docsBranch(env: Env): string {
+  return env.DOCS_BRANCH?.trim() || DOCS_BRANCH_DEFAULT;
+}
+function docsContentRoot(env: Env): string {
+  return env.DOCS_CONTENT_ROOT?.trim() || DOCS_CONTENT_ROOT_DEFAULT;
+}
 
 // 1. Strip references — inline citations + Sources Consulted + Verification
 // checklist sections. Leave diagram contents alone (citations inside Mermaid
@@ -696,15 +716,23 @@ Rules:
   return text;
 }
 
-// List the top-level section directories under src/content/docs in the docs
-// repo. Used by the publish modal to populate a section dropdown so users
-// can choose where to land (e.g. /analysis, /solution-architecture,
-// /frameworks). Falls back gracefully on API errors.
+// List top-level + nested section directories under the docs content root
+// (e.g. `src/content/docs/`). Used by the publish modal's section dropdown.
+//
+// Uses GitHub's git/trees API with recursive=1 — one call returns every
+// path in the repo, which we filter to directories under the content root
+// up to 2 levels deep (top-level + one nested level).
+//
+// Output is a flat list of relative paths like:
+//   ["ai", "ai/agents-and-tools", "ai/rag-and-retrieval",
+//    "architecture", "architecture/solution-architecture", ...]
+//
+// The frontend renders these grouped by top-level in optgroups.
 async function listDocsSections(env: Env): Promise<string[]> {
   if (!env.DOCS_GITHUB_TOKEN) {
     throw new Error('DOCS_GITHUB_TOKEN not configured');
   }
-  const url = `https://api.github.com/repos/${DOCS_REPO}/contents/${DOCS_CONTENT_ROOT}?ref=${DOCS_BRANCH}`;
+  const url = `https://api.github.com/repos/${docsRepo(env)}/git/trees/${docsBranch(env)}?recursive=1`;
   const res = await fetch(url, {
     headers: {
       Authorization: `Bearer ${env.DOCS_GITHUB_TOKEN}`,
@@ -716,11 +744,27 @@ async function listDocsSections(env: Env): Promise<string[]> {
   if (!res.ok) {
     throw new Error(`List sections failed: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
   }
-  const items: any[] = await res.json();
-  return items
-    .filter((i) => i?.type === 'dir' && /^[a-z0-9][a-z0-9-]*$/.test(i.name))
-    .map((i) => i.name)
-    .sort();
+  const data: any = await res.json();
+  const tree: any[] = Array.isArray(data?.tree) ? data.tree : [];
+  // Cap depth = 2 (top-level + one nested) to keep the dropdown manageable.
+  // Path segment validation prevents path-injection AND filters out any
+  // unusual dirs (with spaces, uppercase, dots) that aren't valid docs slugs.
+  const root = docsContentRoot(env);
+  const prefix = root.endsWith('/') ? root : root + '/';
+  const sections = new Set<string>();
+  const segmentRx = /^[a-z0-9][a-z0-9-]*$/;
+  for (const item of tree) {
+    if (item?.type !== 'tree') continue;
+    if (typeof item.path !== 'string') continue;
+    if (!item.path.startsWith(prefix)) continue;
+    const rel = item.path.slice(prefix.length);
+    if (!rel) continue;
+    const parts = rel.split('/');
+    if (parts.length > 2) continue;        // too deep, skip
+    if (!parts.every((p: string) => segmentRx.test(p))) continue;
+    sections.add(rel);
+  }
+  return [...sections].sort();
 }
 
 // 3. Commit a file to the docs repo. Uses GitHub's Contents API — supports
@@ -735,7 +779,7 @@ async function publishToGithub(
   if (!env.DOCS_GITHUB_TOKEN) {
     throw new Error('DOCS_GITHUB_TOKEN not configured on worker');
   }
-  const apiUrl = `https://api.github.com/repos/${DOCS_REPO}/contents/${filePath}`;
+  const apiUrl = `https://api.github.com/repos/${docsRepo(env)}/contents/${filePath}`;
   const ghHeaders: HeadersInit = {
     Authorization: `Bearer ${env.DOCS_GITHUB_TOKEN}`,
     Accept: 'application/vnd.github+json',
@@ -747,7 +791,7 @@ async function publishToGithub(
   // GET first to find existing SHA (required for update; absent for create)
   let existingSha: string | undefined;
   try {
-    const getRes = await fetch(`${apiUrl}?ref=${DOCS_BRANCH}`, { headers: ghHeaders });
+    const getRes = await fetch(`${apiUrl}?ref=${docsBranch(env)}`, { headers: ghHeaders });
     if (getRes.ok) {
       const existing: any = await getRes.json();
       existingSha = existing.sha;
@@ -764,7 +808,7 @@ async function publishToGithub(
   const body: Record<string, any> = {
     message: commitMessage,
     content: contentB64,
-    branch: DOCS_BRANCH,
+    branch: docsBranch(env),
   };
   if (existingSha) body.sha = existingSha;
 
@@ -1379,11 +1423,14 @@ export default {
           { status: 400, headers: { 'Content-Type': 'application/json', ...cors } }
         );
       }
-      // Same character set as slug — prevents path injection (no .., no slashes).
-      if (!/^[a-z0-9][a-z0-9-]{0,60}$/.test(section)) {
+      // Allow either a top-level section ("architecture") or one nested level
+      // ("architecture/solution-architecture"). Same char set as slug for
+      // each segment so path-injection (.., absolute paths, special chars)
+      // is still impossible.
+      if (!/^[a-z0-9][a-z0-9-]{0,60}(\/[a-z0-9][a-z0-9-]{0,60})?$/.test(section)) {
         return new Response(
           JSON.stringify({
-            error: 'section must be lowercase alphanumeric + hyphens, 1-61 chars',
+            error: 'section must be lowercase alphanumeric + hyphens, optionally one "/<subsection>"',
           }),
           { status: 400, headers: { 'Content-Type': 'application/json', ...cors } }
         );
@@ -1413,7 +1460,7 @@ export default {
           '---\n\n';
         const final = frontmatter + firstPerson;
         // 4. Commit to GitHub — path is <content-root>/<section>/<slug>.md
-        const filePath = `${DOCS_CONTENT_ROOT}/${section}/${slug}.md`;
+        const filePath = `${docsContentRoot(env)}/${section}/${slug}.md`;
         const result = await publishToGithub(
           filePath,
           final,
