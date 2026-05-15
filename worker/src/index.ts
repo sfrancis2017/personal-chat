@@ -183,7 +183,7 @@ Rules:
 4. Embed Mermaid diagrams from the chat verbatim in \`\`\`mermaid fences. Don't redraw them — copy the source. **Smart-patch rule:** if a chat diagram is missing the diagram type declaration on its first line (i.e. starts directly with \`classDef\` or with a node like \`A["..."]\` instead of with \`flowchart TD\` / \`flowchart LR\` / etc.), PREPEND the appropriate diagram type as the new first line. Use \`flowchart TD\` for top-down process flows, \`flowchart LR\` for left-right pipelines, \`sequenceDiagram\` / \`classDiagram\` where the syntax indicates them. This is a fix, not a rewrite — everything else stays verbatim. Without the type declaration on line 1, Mermaid v10+ refuses to render with "No diagram type detected". For any fresh diagram you produce, use \`<br>\` (NOT \`\\n\`) for line breaks in node and edge labels.
 5. Match the Stratechery / Dan Luu register: direct, lightly editorial, no hedging, no "happy to help."
 6. **Citations**: Do NOT use inline citations like *(BookName — topic)* or footnote markers. Instead, end the document with a brief **Sources consulted** section listing the reference materials drawn from — book titles and authors only, NOT file paths, chunk identifiers, or topic slugs. For content drawn from Sajiv's own writing in the corpus, no citation is needed (it's his own work). If no third-party reference materials were used, omit the Sources consulted section entirely.
-7. Don't pad. Aim for 600–1500 words depending on chat depth.
+7. Don't pad — but DO complete the document. Length should match chat depth: 600 words for shallow conversations, 3000+ words for deeply-grounded multi-source whitepapers. **CRITICAL: every section from executive summary through conclusion/recommendation must have substantive content. Never truncate the conclusion to hit a word target. If the conversation has 6 scenarios, every scenario gets full treatment; if it has 2, don't pad to fake length. Always reach the final section (Recommendation / Conclusion / Outlook) with full content — readers will notice a missing ending more than a slightly long body.**
 8. Speak about Sajiv in the third person. Never name his employer — use "a Fortune 50 technology company."
 9. The output is markdown only. Start with the title (# Title) on the first line, byline directly below.`,
   'synthesize-slides': `You are converting a conversation between Sajiv Francis and his assistant into a slide-deck markdown for presentation.
@@ -588,7 +588,11 @@ async function synthesize(
 
   const body = JSON.stringify({
     model: env.ANTHROPIC_MODEL,
-    max_tokens: 16384,
+    // 32k output for synthesis — long cross-module whitepapers with 4-6
+    // diagrams + tables can blow through 16k mid-conclusion. Sonnet 4.6
+    // supports up to 64k output; 32k leaves cost headroom but doesn't
+    // truncate realistic whitepaper bodies.
+    max_tokens: 32768,
     system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
     messages: outboundMessages,
   });
@@ -848,9 +852,12 @@ async function streamFromAnthropic(
 
   const requestBody = JSON.stringify({
     model: env.ANTHROPIC_MODEL,
-    // Synthesis can produce long whitepapers / multi-slide decks (each diagram alone
-    // can be 1-2k tokens, and we want headroom for 2-3 diagrams). Chat rarely exceeds 4k.
-    max_tokens: mode && mode !== 'chat' ? 16384 : 4096,
+    // Synthesis can produce long whitepapers / multi-slide decks (each diagram
+    // alone is 800-1500 tokens, and cross-module whitepapers can have 4-6
+    // diagrams + tables + extensive prose). 16k was hitting the cap mid-conclusion
+    // on dense outputs. 32k gives substantial headroom while still well under
+    // Sonnet 4.6's 64k output ceiling. Chat rarely exceeds 4k.
+    max_tokens: mode && mode !== 'chat' ? 32768 : 4096,
     system: systemBlocks,
     messages: outboundMessages.map((m) => ({ role: m.role, content: m.content })),
     stream: true,
