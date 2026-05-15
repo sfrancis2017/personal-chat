@@ -53,11 +53,12 @@ html, body {
 body {
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
-  grid-template-rows: auto 1fr auto auto auto;
+  grid-template-rows: auto 1fr auto auto auto auto;
   grid-template-areas:
     "sidebar header"
     "sidebar conversation"
     "sidebar topics"
+    "sidebar sources"
     "sidebar composer-area"
     "sidebar footnote";
   /* Exact 100vh (not min-height) so the grid is constrained to the viewport.
@@ -93,10 +94,12 @@ body {
     /* minmax(0, 1fr) — bare `1fr` defaults to minmax(auto, 1fr) which lets wide
        content (mermaid SVG) force the column wider than the viewport. */
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto 1fr auto auto auto auto;
     grid-template-areas:
       "header"
       "conversation"
       "topics"
+      "sources"
       "composer-area"
       "footnote";
     max-width: 760px;
@@ -588,8 +591,12 @@ a:hover { text-decoration: underline; }
 }
 
 /* Source chips — pinned source documents shown above the composer.
-   Mirrors topic-chips structure so the visual language is consistent. */
+   Mirrors topic-chips structure so the visual language is consistent.
+   grid-area: sources places this in the body grid (between topics row
+   and composer-area row) so it's always within the viewport instead of
+   being auto-placed in an implicit row below the named grid. */
 .source-chips {
+  grid-area: sources;
   padding: 0.35rem 1.25rem;
   display: flex;
   align-items: center;
