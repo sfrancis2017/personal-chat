@@ -96,6 +96,9 @@ function refreshAuthGatedUI() {
   document.querySelectorAll('.export-menu-item[data-export^="synthesize-"]').forEach((btn) => {
     btn.hidden = !owner;
   });
+  // Saved Artifacts panel — owner-only (work-tool's read source)
+  if (sidebarArtifactsEl) sidebarArtifactsEl.hidden = !owner;
+  if (owner) loadArtifacts();
   // Sidebar history is local to the device. Hide for public visitors —
   // less chrome on a clean read-only chat surface.
   const sidebarList = document.getElementById('sidebar-list');
@@ -351,11 +354,23 @@ function renderLibrary() {
       if (s.visibility) row.dataset.visibility = s.visibility;
       row.title = s.source_path;
       const isSelected = selectedSources.has(s.source_path);
+      const owner = isOwnerMode();
+      // Owner-only: clickable visibility chip that flips public ↔ private.
+      // Anonymous visitors don't see the chip; they only see the inherited
+      // "pub" badge styling via the ::after pseudo-element on data-visibility.
+      const visChip = owner && s.visibility
+        ? `<button type="button" class="library-source-vis library-source-vis-${escapeHtml(s.visibility)}"
+                   data-source-path="${escapeHtml(s.source_path)}"
+                   data-current="${escapeHtml(s.visibility)}"
+                   title="Currently ${escapeHtml(s.visibility)} — click to flip"
+                   aria-label="Toggle visibility (currently ${escapeHtml(s.visibility)})">${escapeHtml(s.visibility)}</button>`
+        : '';
       row.innerHTML = `
         <input type="checkbox" class="library-source-checkbox"
                data-source-path="${escapeHtml(s.source_path)}"
                ${isSelected ? 'checked' : ''} />
         <span class="library-source-title">${escapeHtml(s.title || s.source_path)}</span>
+        ${visChip}
         <span class="library-source-count">${s.chunks}</span>
       `;
       const cb = row.querySelector('.library-source-checkbox');
@@ -372,6 +387,23 @@ function renderLibrary() {
         renderSourceChips();
         renderLibrarySelectionSummary();
       });
+      const visBtn = row.querySelector('.library-source-vis');
+      if (visBtn) {
+        visBtn.addEventListener('click', async (e) => {
+          // Don't toggle the row's checkbox when clicking the chip
+          e.preventDefault();
+          e.stopPropagation();
+          const current = visBtn.dataset.current;
+          const next = current === 'public' ? 'private' : 'public';
+          if (!confirm(
+            `Move "${s.title || s.source_path}" to ${next} visibility?\n\n` +
+            (next === 'private'
+              ? 'Public-mode visitors will no longer see chunks from this source. Owner-mode still sees everything.'
+              : 'Public-mode visitors will be able to retrieve chunks from this source.')
+          )) return;
+          await updateSourceVisibility(s.source_path, next);
+        });
+      }
       sourcesWrap.appendChild(row);
     }
     topicEl.appendChild(sourcesWrap);
@@ -433,6 +465,9 @@ function renderSourceChips() {
   sourceChipsRow.replaceChildren();
   if (selectedSources.size === 0) {
     sourceChips.hidden = true;
+    // Auto-clear confidence toggle when no sources remain — confidence mode
+    // requires source pinning, so a hidden-but-checked state is confusing.
+    if (confidenceToggle) confidenceToggle.checked = false;
     return;
   }
   sourceChips.hidden = false;
@@ -506,6 +541,151 @@ function loadSourceSelectionsFromActiveChat() {
   }
   renderSourceChips();
   renderLibrarySelectionSummary();
+}
+
+// ---- Saved Artifacts sidebar panel (owner-only) --------------------------
+//
+// Persistent list of artifacts saved to /api/artifacts. Confirms after each
+// save (count pulses, new entry appears) and gives a one-click cleanup path
+// (delete per row) so the work tool only sees what you want it to see.
+
+const ARTIFACTS_URL = API_URL.replace(/\/chat\/?$/, '/api/artifacts');
+const sidebarArtifactsEl = document.getElementById('sidebar-artifacts');
+const artifactsListEl = document.getElementById('sidebar-artifacts-list');
+const artifactsCountEl = document.getElementById('sidebar-artifacts-count');
+
+let artifactsList = [];
+
+async function loadArtifacts({ flashCount = false } = {}) {
+  if (!isOwnerMode()) {
+    artifactsList = [];
+    renderArtifacts();
+    return;
+  }
+  const token = getToken();
+  if (!token) return;
+  try {
+    const r = await fetch(ARTIFACTS_URL, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!r.ok) return;
+    const j = await r.json();
+    if (Array.isArray(j.artifacts)) {
+      artifactsList = j.artifacts;
+      renderArtifacts();
+      if (flashCount && artifactsCountEl) {
+        artifactsCountEl.classList.add('flash');
+        setTimeout(() => artifactsCountEl.classList.remove('flash'), 1200);
+      }
+    }
+  } catch {
+    // silent — owner-only side feature, don't block chat on it
+  }
+}
+
+function renderArtifacts() {
+  if (!artifactsListEl) return;
+  artifactsListEl.replaceChildren();
+  if (artifactsCountEl) {
+    artifactsCountEl.textContent = artifactsList.length ? String(artifactsList.length) : '';
+  }
+  if (artifactsList.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'artifacts-empty';
+    empty.textContent = 'No saved artifacts yet';
+    artifactsListEl.appendChild(empty);
+    return;
+  }
+  for (const a of artifactsList) {
+    const row = document.createElement('div');
+    row.className = 'artifacts-row';
+    row.dataset.artifactId = a.id;
+    const date = a.created_at ? new Date(a.created_at) : null;
+    const dateStr = date
+      ? `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+      : '';
+    const modeShort =
+      a.mode === 'all' ? 'all 3' :
+      a.mode === 'synthesize-whitepaper' ? 'whitepaper' :
+      a.mode === 'synthesize-slides' ? 'slides' :
+      a.mode === 'synthesize-email' ? 'email' :
+      (a.mode || '');
+    row.innerHTML = `
+      <div class="artifacts-row-main">
+        <div class="artifacts-row-title">${escapeHtml(a.title || a.id)}</div>
+        <div class="artifacts-row-meta">${escapeHtml(modeShort)} · ${escapeHtml(dateStr)}</div>
+      </div>
+      <div class="artifacts-row-actions">
+        <button type="button" class="artifacts-action artifacts-copy" title="Copy artifact id to clipboard">copy id</button>
+        <button type="button" class="artifacts-action artifacts-delete" title="Delete this artifact">×</button>
+      </div>
+    `;
+    row.querySelector('.artifacts-copy').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try {
+        await navigator.clipboard.writeText(a.id);
+        const btn = e.currentTarget;
+        const orig = btn.textContent;
+        btn.textContent = 'copied ✓';
+        setTimeout(() => (btn.textContent = orig), 1200);
+      } catch {}
+    });
+    row.querySelector('.artifacts-delete').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm(`Delete artifact "${a.title || a.id}"?\n\nThis cannot be undone.`)) return;
+      await deleteArtifact(a.id);
+    });
+    artifactsListEl.appendChild(row);
+  }
+}
+
+// Flip a source's visibility between 'public' and 'private'. Owner-only.
+// After the server confirms, reloads the library so the chip re-renders
+// with the new state and any visibility-dependent filtering updates.
+async function updateSourceVisibility(sourcePath, newVisibility) {
+  const token = getToken();
+  if (!token) {
+    alert('Owner mode required.');
+    return;
+  }
+  const url = API_URL.replace(/\/chat\/?$/, '/update_visibility');
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ source_path: sourcePath, visibility: newVisibility }),
+    });
+    if (!r.ok) {
+      const text = await r.text();
+      throw new Error(`HTTP ${r.status}: ${text.slice(0, 200)}`);
+    }
+    // Reload library to pick up the change. selectedSources state is
+    // preserved because it's keyed by source_path.
+    await loadLibrary();
+  } catch (err) {
+    alert(`Visibility update failed: ${err?.message ?? err}`);
+  }
+}
+
+async function deleteArtifact(id) {
+  const token = getToken();
+  if (!token) return;
+  try {
+    const r = await fetch(`${ARTIFACTS_URL}/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (r.ok) {
+      await loadArtifacts();
+    } else {
+      alert(`Delete failed: HTTP ${r.status}`);
+    }
+  } catch (e) {
+    alert(`Delete failed: ${e?.message ?? e}`);
+  }
 }
 
 // Wire search input and clear button.
@@ -702,6 +882,60 @@ function renderQuickPrompts() {
 }
 
 const SIDEBAR_COLLAPSED_KEY = 'chat-sidebar-collapsed';
+const SIDEBAR_WIDTH_KEY = 'chat-sidebar-width';
+const SIDEBAR_MIN_PX = 200;
+const SIDEBAR_MAX_PX = 600;
+
+// Drag-to-resize sidebar: drives --sidebar-width CSS variable, persists to
+// localStorage so the width survives reloads. Hidden on mobile via CSS.
+function setSidebarWidth(px, persist = true) {
+  const clamped = Math.max(SIDEBAR_MIN_PX, Math.min(SIDEBAR_MAX_PX, Math.round(px)));
+  document.documentElement.style.setProperty('--sidebar-width', clamped + 'px');
+  if (persist) {
+    try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(clamped)); } catch {}
+  }
+}
+
+// Restore saved width on first load
+try {
+  const saved = parseInt(localStorage.getItem(SIDEBAR_WIDTH_KEY) ?? '', 10);
+  if (Number.isFinite(saved) && saved >= SIDEBAR_MIN_PX && saved <= SIDEBAR_MAX_PX) {
+    setSidebarWidth(saved, false);
+  }
+} catch {}
+
+const sidebarResizeHandle = document.getElementById('sidebar-resize-handle');
+if (sidebarResizeHandle) {
+  let isResizing = false;
+  sidebarResizeHandle.addEventListener('mousedown', (e) => {
+    if (isMobileViewport()) return;
+    isResizing = true;
+    sidebarResizeHandle.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!isResizing) return;
+    setSidebarWidth(e.clientX, false);  // don't thrash localStorage on every move
+  });
+  document.addEventListener('mouseup', () => {
+    if (!isResizing) return;
+    isResizing = false;
+    sidebarResizeHandle.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    // Persist final width once on mouseup
+    const current = getComputedStyle(document.documentElement)
+      .getPropertyValue('--sidebar-width').trim();
+    const px = parseFloat(current);
+    if (Number.isFinite(px)) {
+      try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(px))); } catch {}
+    }
+  });
+  // Double-click handle = reset to default 280px
+  sidebarResizeHandle.addEventListener('dblclick', () => setSidebarWidth(280));
+}
 
 function isMobileViewport() {
   return window.matchMedia('(max-width: 800px)').matches;
@@ -1383,6 +1617,55 @@ function downloadMarkdown(modeKind, markdown) {
 // Bulk synthesis: calls /api/synthesize/all on the Worker (server-side
 // orchestration runs whitepaper, then slides + email in parallel from the
 // whitepaper). Triggers three downloads when done. ~60s end-to-end.
+// Uses a modal (processing → confirmation) instead of a corner toast so the
+// save status is unmissable.
+const synthAllModal = document.getElementById('synth-all-modal');
+const synthAllModalTitle = document.getElementById('synth-all-modal-title');
+const synthAllProgress = document.getElementById('synth-all-progress');
+const synthAllResult = document.getElementById('synth-all-result');
+const synthAllElapsed = document.getElementById('synth-all-elapsed');
+const synthAllSavedId = document.getElementById('synth-all-saved-id');
+const synthAllSavedUrl = document.getElementById('synth-all-saved-url');
+const synthAllSavedSection = document.getElementById('synth-all-saved');
+const synthAllErrorEl = document.getElementById('synth-all-error');
+const synthAllCopyUrlBtn = document.getElementById('synth-all-copy-url');
+const synthAllDoneBtn = document.getElementById('synth-all-done-btn');
+const synthAllCloseBtn = document.getElementById('synth-all-modal-close');
+
+function openSynthAllModal() {
+  if (!synthAllModal) return;
+  synthAllModalTitle.textContent = 'Synthesizing all three artifacts';
+  synthAllProgress.hidden = false;
+  synthAllResult.hidden = true;
+  synthAllElapsed.textContent = 'Elapsed: 0:00';
+  synthAllSavedSection.hidden = true;
+  synthAllErrorEl.hidden = true;
+  synthAllErrorEl.textContent = '';
+  synthAllDoneBtn.hidden = true;
+  synthAllCloseBtn.hidden = true;
+  synthAllModal.hidden = false;
+  document.body.style.overflow = 'hidden';
+}
+function closeSynthAllModal() {
+  if (!synthAllModal) return;
+  synthAllModal.hidden = true;
+  document.body.style.overflow = '';
+}
+if (synthAllDoneBtn) synthAllDoneBtn.addEventListener('click', closeSynthAllModal);
+if (synthAllCloseBtn) synthAllCloseBtn.addEventListener('click', closeSynthAllModal);
+if (synthAllCopyUrlBtn) {
+  synthAllCopyUrlBtn.addEventListener('click', async () => {
+    const url = synthAllSavedUrl.textContent;
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      const orig = synthAllCopyUrlBtn.textContent;
+      synthAllCopyUrlBtn.textContent = 'Copied ✓';
+      setTimeout(() => (synthAllCopyUrlBtn.textContent = orig), 1500);
+    } catch {}
+  });
+}
+
 async function exportSynthesizeAll() {
   const chat = getActiveChat();
   if (!chat || chat.messages.length === 0) {
@@ -1394,8 +1677,6 @@ async function exportSynthesizeAll() {
     alert('Owner mode required for synthesis.');
     return;
   }
-
-  // Filter to user + assistant turns only — same shape Anthropic expects.
   const messages = chat.messages
     .filter((m) => m.role === 'user' || m.role === 'assistant')
     .map((m) => ({ role: m.role, content: m.content }));
@@ -1404,12 +1685,17 @@ async function exportSynthesizeAll() {
     return;
   }
 
-  // Minimal inline status — a corner toast so user sees progress without
-  // blocking the chat UI. Updates in place as the call progresses.
-  const toast = document.createElement('div');
-  toast.className = 'synth-all-toast';
-  toast.textContent = 'Synthesizing all three artifacts… this takes ~60 seconds.';
-  document.body.appendChild(toast);
+  // Open the modal in processing state
+  openSynthAllModal();
+  const startTime = Date.now();
+  const elapsedTimer = setInterval(() => {
+    const sec = Math.floor((Date.now() - startTime) / 1000);
+    const mm = Math.floor(sec / 60);
+    const ss = sec % 60;
+    if (synthAllElapsed) {
+      synthAllElapsed.textContent = `Elapsed: ${mm}:${String(ss).padStart(2, '0')}`;
+    }
+  }, 1000);
 
   const url = API_URL.replace(/\/chat\/?$/, '/api/synthesize/all');
   try {
@@ -1431,20 +1717,17 @@ async function exportSynthesizeAll() {
       throw new Error('Incomplete response from /api/synthesize/all');
     }
 
-    // Three sequential downloads. Some browsers throttle rapid-fire downloads
-    // — a short stagger improves reliability without noticeable delay.
+    // Three sequential downloads, short stagger to avoid browser throttling.
     downloadMarkdown('synthesize-whitepaper', whitepaper);
     setTimeout(() => downloadMarkdown('synthesize-slides', slides), 250);
     setTimeout(() => downloadMarkdown('synthesize-email', email), 500);
 
-    // Persist to the artifact store so the work tool can pull it later via
-    // GET /api/artifacts. Title derived from the whitepaper's H1 (first line).
-    // Failures here don't undo the downloads — best-effort save with a clear
-    // status message either way.
+    // Persist to /api/artifacts — title from whitepaper H1.
     const titleMatch = whitepaper.match(/^#\s+(.+)$/m);
     const title = (titleMatch ? titleMatch[1] : (chat.title ?? 'Untitled')).trim().slice(0, 300);
     const saveUrl = API_URL.replace(/\/chat\/?$/, '/api/artifacts');
     let savedId = null;
+    let saveErrorMsg = null;
     try {
       const saveRes = await fetch(saveUrl, {
         method: 'POST',
@@ -1464,20 +1747,46 @@ async function exportSynthesizeAll() {
         savedId = saved.id;
       } else {
         const errText = await saveRes.text();
+        saveErrorMsg = `Save returned HTTP ${saveRes.status}: ${errText.slice(0, 200)}`;
         console.warn('Artifact save failed:', saveRes.status, errText.slice(0, 200));
       }
     } catch (saveErr) {
+      saveErrorMsg = `Save error: ${saveErr?.message ?? saveErr}`;
       console.warn('Artifact save error:', saveErr);
     }
 
-    toast.textContent = savedId
-      ? `Done. Three .md files downloaded. Saved as ${savedId} (available to work tool).`
-      : 'Done. Three .md files downloaded. (Artifact save failed — see console.)';
-    setTimeout(() => toast.remove(), 6000);
+    // Flip modal into result state
+    clearInterval(elapsedTimer);
+    synthAllProgress.hidden = true;
+    synthAllResult.hidden = false;
+    synthAllDoneBtn.hidden = false;
+    synthAllCloseBtn.hidden = false;
+    if (savedId) {
+      synthAllModalTitle.textContent = '✓ Three artifacts ready';
+      synthAllSavedSection.hidden = false;
+      synthAllSavedId.textContent = savedId;
+      const fullUrl = `${ARTIFACTS_URL}/${savedId}`;
+      synthAllSavedUrl.textContent = fullUrl;
+      // Refresh the sidebar Saved artifacts panel — count pulses, new entry appears
+      loadArtifacts({ flashCount: true });
+    } else {
+      synthAllModalTitle.textContent = '⚠ Downloaded but not saved';
+      synthAllSavedSection.hidden = true;
+      synthAllErrorEl.hidden = false;
+      synthAllErrorEl.textContent =
+        (saveErrorMsg ?? 'Unknown save error') +
+        ' — The three .md files downloaded successfully, but the artifact store save failed. Work tool will not see this artifact via the API.';
+    }
   } catch (err) {
-    toast.textContent = `Synthesis failed: ${err?.message ?? err}`;
-    toast.classList.add('synth-all-toast-error');
-    setTimeout(() => toast.remove(), 6000);
+    clearInterval(elapsedTimer);
+    synthAllProgress.hidden = true;
+    synthAllResult.hidden = false;
+    synthAllDoneBtn.hidden = false;
+    synthAllCloseBtn.hidden = false;
+    synthAllModalTitle.textContent = '✗ Synthesis failed';
+    synthAllSavedSection.hidden = true;
+    synthAllErrorEl.hidden = false;
+    synthAllErrorEl.textContent = `${err?.message ?? err}`;
   }
 }
 
@@ -1684,6 +1993,8 @@ if (previewSaveArtifactBtn) {
       }
       const saved = await res.json();
       previewSaveArtifactBtn.textContent = `Saved ✓ ${saved.id}`;
+      // Refresh sidebar artifacts panel — new entry appears + count pulses
+      loadArtifacts({ flashCount: true });
     } catch (err) {
       console.error('Save to artifacts failed:', err);
       previewSaveArtifactBtn.textContent = 'Save failed';

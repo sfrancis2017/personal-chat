@@ -826,6 +826,40 @@ export default {
       }
     }
 
+    // Library visibility toggle (owner-only). Used by the chat surface to
+    // move chunks between public-eligible and owner-only visibility. Same
+    // Bearer auth as /ingest. Body: { source_path, visibility: 'public'|'private' }
+    if (url.pathname === '/update_visibility' && req.method === 'POST') {
+      if (!isAuthorized(req, env)) {
+        return new Response(JSON.stringify({ error: 'unauthorized' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      try {
+        const upstreamUrl = env.RETRIEVE_URL.replace(/\/retrieve\/?$/, '/update_visibility');
+        const body = await req.text();
+        const r = await fetch(upstreamUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${env.RETRIEVE_TOKEN}`,
+          },
+          body,
+        });
+        const respText = await r.text();
+        return new Response(respText, {
+          status: r.status,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: String(e) }), {
+          status: 502,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+    }
+
     if (url.pathname === '/ingest' && req.method === 'POST') {
       if (!isAuthorized(req, env)) {
         return new Response(JSON.stringify({ error: 'unauthorized' }), {

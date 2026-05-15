@@ -199,6 +199,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/benchmark/start":
             self._handle_benchmark_start()
             return
+        if self.path == "/update_visibility":
+            self._handle_update_visibility()
+            return
         if self.path != "/retrieve":
             self._json(404, {"error": "not found"})
             return
@@ -701,6 +704,60 @@ def _handle_ingest(self) -> None:
 
 # Bind the handler method to the class
 Handler._handle_ingest = _handle_ingest  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# Visibility update — owner-only. Flips metadata.visibility for all active
+# chunks of a given source_path. Lets the owner move a source from the public
+# library to the owner-only library (or back). Called from chat surface
+# library UI; not exposed to public visitors.
+# ---------------------------------------------------------------------------
+
+def _handle_update_visibility(self) -> None:
+    if not self._check_auth():
+        return
+    try:
+        length = int(self.headers.get("Content-Length", "0"))
+        raw = self.rfile.read(length) if length else b"{}"
+        body = json.loads(raw)
+    except Exception:
+        self._json(400, {"error": "invalid json"})
+        return
+
+    source_path = body.get("source_path")
+    visibility = body.get("visibility")
+    if not isinstance(source_path, str) or not source_path.strip():
+        self._json(400, {"error": "source_path required"})
+        return
+    if visibility not in ("public", "private"):
+        self._json(400, {"error": "visibility must be 'public' or 'private'"})
+        return
+
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        # jsonb_set adds the key if absent, replaces if present. JSON-encode
+        # the value so it lands as a quoted JSON string ("public" not public).
+        cur.execute(
+            "UPDATE chunks "
+            "SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{visibility}', %s::jsonb, true) "
+            "WHERE source_path = %s AND valid_until IS NULL",
+            (json.dumps(visibility), source_path),
+        )
+        affected = cur.rowcount
+        conn.commit()
+        self._json(200, {
+            "source_path": source_path,
+            "visibility": visibility,
+            "updated_chunks": affected,
+        })
+    except Exception as e:
+        self._json(500, {"error": f"db: {e}"})
+    finally:
+        POOL.putconn(conn)
+
+
+Handler._handle_update_visibility = _handle_update_visibility  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------

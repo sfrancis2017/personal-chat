@@ -105,6 +105,7 @@
     </div>
 
     <aside class="sidebar" id="sidebar" aria-label="Chat history">
+      <div class="sidebar-resize-handle" id="sidebar-resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" title="Drag to resize sidebar"></div>
       <div class="sidebar-head">
         <button type="button" id="new-chat" class="new-chat" aria-label="Start a new chat">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -137,6 +138,13 @@
       <details class="sidebar-prompts" id="sidebar-prompts">
         <summary class="sidebar-prompts-summary">Quick prompts</summary>
         <div class="sidebar-prompts-list" id="sidebar-prompts-list"></div>
+      </details>
+      <details class="sidebar-artifacts" id="sidebar-artifacts" hidden>
+        <summary class="sidebar-artifacts-summary">
+          <span>Saved artifacts</span>
+          <span class="sidebar-artifacts-count" id="sidebar-artifacts-count"></span>
+        </summary>
+        <div class="sidebar-artifacts-list" id="sidebar-artifacts-list"></div>
       </details>
       <details class="sidebar-library" id="sidebar-library">
         <summary class="sidebar-library-summary">
@@ -183,13 +191,9 @@
     <div class="source-chips" id="source-chips" hidden aria-label="Pinned source documents">
       <span class="source-chips-label">Sources</span>
       <div class="source-chips-row" id="source-chips-row" role="group"></div>
-    </div>
-
-    <div class="confidence-row" id="confidence-row" aria-label="High-confidence mode toggle">
-      <label class="confidence-toggle">
+      <label class="confidence-toggle source-chips-confidence" title="Wider retrieval (top-K=15) + full-content injection when budget allows, citation-strict prompt, plus a verification checklist at the end. Use for work-grade output.">
         <input type="checkbox" id="confidence-toggle" />
-        <span class="confidence-label-text">High-confidence mode</span>
-        <span class="confidence-hint" title="Wider retrieval (top-K=15), forces source selection, citation-strict prompt, plus a post-generation verification pass that flags ungrounded claims. Slower + costlier per turn — use for work-grade output.">ⓘ</span>
+        <span class="confidence-label-text">High-confidence</span>
       </label>
     </div>
 
@@ -252,6 +256,46 @@
     <div class="diagram-modal" id="diagram-modal" hidden role="dialog" aria-modal="true" aria-label="Diagram full view">
       <button type="button" class="diagram-modal-close" id="diagram-modal-close" aria-label="Close diagram view">×</button>
       <div class="diagram-modal-content" id="diagram-modal-content"></div>
+    </div>
+
+    <!-- Bulk synthesis processing + confirmation modal. Replaces the old corner
+         toast for "Synthesize all three" — stays open until user dismisses, shows
+         clear save confirmation + artifact id + fetchable endpoint URL. -->
+    <div class="synth-all-modal" id="synth-all-modal" hidden role="dialog" aria-modal="true" aria-label="Synthesize all three artifacts">
+      <div class="synth-all-modal-card">
+        <header class="synth-all-modal-header">
+          <h2 class="synth-all-modal-title" id="synth-all-modal-title">Synthesizing all three artifacts</h2>
+          <button type="button" class="synth-all-modal-close" id="synth-all-modal-close" aria-label="Close" hidden>×</button>
+        </header>
+        <div class="synth-all-modal-body" id="synth-all-modal-body">
+          <div class="synth-all-progress" id="synth-all-progress">
+            <div class="synth-all-spinner" aria-hidden="true"></div>
+            <p class="synth-all-progress-text">Whitepaper → Slides → Email. Generating with Claude, ~60 seconds total.</p>
+            <p class="synth-all-elapsed" id="synth-all-elapsed">Elapsed: 0:00</p>
+          </div>
+          <div class="synth-all-result" id="synth-all-result" hidden>
+            <ul class="synth-all-checklist">
+              <li>✓ Whitepaper.md downloaded</li>
+              <li>✓ Slides.md downloaded</li>
+              <li>✓ Email.md downloaded</li>
+            </ul>
+            <div class="synth-all-saved" id="synth-all-saved">
+              <div class="synth-all-saved-label">Saved to artifact store</div>
+              <div class="synth-all-saved-id" id="synth-all-saved-id"></div>
+              <div class="synth-all-saved-url-label">Fetchable from work tool:</div>
+              <div class="synth-all-saved-url">
+                <code id="synth-all-saved-url"></code>
+                <button type="button" class="synth-all-copy-url" id="synth-all-copy-url">Copy URL</button>
+              </div>
+              <p class="synth-all-saved-hint">The new entry is at the top of the Saved artifacts panel in the sidebar.</p>
+            </div>
+            <div class="synth-all-error" id="synth-all-error" hidden></div>
+          </div>
+        </div>
+        <footer class="synth-all-modal-footer">
+          <button type="button" class="preview-action preview-action-primary" id="synth-all-done-btn" hidden>Done</button>
+        </footer>
+      </div>
     </div>
 
     <div class="preview-modal" id="preview-modal" hidden role="dialog" aria-modal="true" aria-label="Synthesized export preview">
