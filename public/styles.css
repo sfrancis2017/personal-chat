@@ -2045,6 +2045,119 @@ body.sidebar-collapsed .sidebar {
 /* Print header in preview is hidden on screen */
 .preview-print-header { display: none; }
 
+/* ---- Whitepaper chrome (banner + ToC + back-to-top) -------------------- */
+/* Screen styling: render the banner + ToC + back-links as part of the
+   preview so what you see in the preview modal is what you'll get in the
+   exported PDF. */
+
+.whitepaper-banner {
+  margin: -1rem -1rem 1.5rem;
+  background: #ffffff;
+  border-bottom: 1px solid #e5e5e5;
+}
+.whitepaper-banner img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+}
+
+.whitepaper-toc {
+  margin: 1.25rem 0 1.75rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  page-break-after: always;
+}
+.whitepaper-toc-title {
+  margin: 0 0 0.6rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--color-fg);
+  border: none;
+  padding: 0;
+}
+.whitepaper-toc-list,
+.whitepaper-toc-sublist {
+  list-style: decimal;
+  padding-left: 1.25rem;
+  margin: 0.25rem 0;
+}
+.whitepaper-toc-sublist {
+  list-style: lower-alpha;
+  margin-top: 0.2rem;
+  margin-bottom: 0.4rem;
+}
+.whitepaper-toc-l2,
+.whitepaper-toc-l3 {
+  padding: 0.15rem 0;
+  font-size: 0.9rem;
+}
+.whitepaper-toc-l3 { font-size: 0.85rem; color: var(--color-fg-muted); }
+.whitepaper-toc a {
+  color: var(--color-fg);
+  text-decoration: none;
+}
+.whitepaper-toc a:hover {
+  color: var(--color-accent, #1565c0);
+  text-decoration: underline;
+}
+
+.whitepaper-back-to-toc {
+  margin: 0.4rem 0 1.1rem;
+  font-size: 0.72rem;
+  text-align: right;
+}
+.whitepaper-back-to-toc a {
+  color: var(--color-fg-muted);
+  text-decoration: none;
+}
+.whitepaper-back-to-toc a:hover {
+  color: var(--color-accent, #1565c0);
+  text-decoration: underline;
+}
+
+/* Print styles for the whitepaper chrome — banner becomes title-page
+   element, ToC gets its own page, back-links remain anchor-clickable. */
+@media print {
+  body.printing-preview .whitepaper-banner {
+    margin: 0 0 2rem;
+    page-break-after: always;
+    page-break-inside: avoid;
+  }
+  body.printing-preview .whitepaper-banner img {
+    width: 100%;
+    max-width: 7in;
+    margin: 0 auto;
+    display: block;
+  }
+  body.printing-preview .whitepaper-toc {
+    page-break-after: always;
+    page-break-inside: avoid;
+    border: none;
+    background: transparent;
+    padding: 0;
+    margin: 0 0 1rem;
+  }
+  body.printing-preview .whitepaper-toc-title {
+    font-size: 1.4rem;
+    margin-bottom: 1rem;
+  }
+  body.printing-preview .whitepaper-back-to-toc {
+    /* Hide back-links in PDF — the PDF reader's own nav is enough, and
+       printed back-links read as noise. */
+    display: none;
+  }
+  /* Mermaid diagrams in PDF — cap width so dense diagrams don't bleed
+     past the page margins. height: auto preserves aspect ratio. */
+  body.printing-preview .mermaid-block svg {
+    max-width: 6.5in !important;
+    height: auto;
+    margin: 0 auto;
+  }
+}
+
 @media (max-width: 640px) {
   body { padding: 0 1rem; }
   .welcome h1 { font-size: 1.5rem; }

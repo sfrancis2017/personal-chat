@@ -1076,6 +1076,117 @@ async function renderMarkdown(container, source) {
   scrollToBottom();
 }
 
+// ---- Whitepaper chrome (banner + ToC + back-to-top) ---------------------
+//
+// Wraps a rendered whitepaper preview with editorial chrome so the
+// output reads like a polished artifact instead of a markdown blob.
+//   - Banner at the top (og-default.png from main site, 1200×630)
+//   - Auto-generated Table of Contents from H2/H3 headings, with anchors
+//   - "↑ Back to contents" link below each H2 section header
+//   - Slug-based IDs on every H1/H2/H3 for anchor navigation
+//
+// Called after renderMarkdown finishes on the preview content, only when
+// previewMode === 'synthesize-whitepaper'. Slides + email don't get this
+// (slides has its own structure, email is too short to need a ToC).
+function injectWhitepaperChrome(container) {
+  if (!container) return;
+
+  // 1. Slugify + assign IDs to every H1/H2/H3 (idempotent on re-render).
+  const used = new Set();
+  container.querySelectorAll('h1, h2, h3').forEach((h) => {
+    if (h.classList.contains('whitepaper-toc-title')) return;
+    let slug = (h.textContent || 'section')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60) || 'section';
+    let unique = slug;
+    let n = 2;
+    while (used.has(unique)) unique = `${slug}-${n++}`;
+    used.add(unique);
+    h.id = unique;
+  });
+
+  // 2. Remove any existing chrome (idempotent on edit-and-re-render).
+  container.querySelectorAll('.whitepaper-banner, .whitepaper-toc, .whitepaper-back-to-toc')
+    .forEach((el) => el.remove());
+
+  // 3. Banner image at the very top.
+  const banner = document.createElement('div');
+  banner.className = 'whitepaper-banner';
+  banner.innerHTML =
+    '<img src="/img/whitepaper-banner.png" alt="" aria-hidden="true" />';
+  container.insertBefore(banner, container.firstChild);
+
+  // 4. Build ToC from H2/H3 (skip the document's H1 — that's the title).
+  const tocEntries = [];
+  container.querySelectorAll('h2, h3').forEach((h) => {
+    if (h.classList.contains('whitepaper-toc-title')) return;
+    tocEntries.push({
+      level: h.tagName === 'H2' ? 2 : 3,
+      text: h.textContent || '',
+      id: h.id,
+    });
+  });
+  if (tocEntries.length >= 2) {
+    const toc = document.createElement('nav');
+    toc.className = 'whitepaper-toc';
+    toc.id = 'whitepaper-toc';
+    toc.setAttribute('aria-label', 'Table of contents');
+
+    const tocTitle = document.createElement('h2');
+    tocTitle.className = 'whitepaper-toc-title';
+    tocTitle.textContent = 'Contents';
+    toc.appendChild(tocTitle);
+
+    const list = document.createElement('ol');
+    list.className = 'whitepaper-toc-list';
+    let lastL2Li = null;
+    tocEntries.forEach((entry) => {
+      const li = document.createElement('li');
+      li.className = entry.level === 2 ? 'whitepaper-toc-l2' : 'whitepaper-toc-l3';
+      const a = document.createElement('a');
+      a.href = `#${entry.id}`;
+      a.textContent = entry.text;
+      li.appendChild(a);
+      if (entry.level === 2) {
+        list.appendChild(li);
+        lastL2Li = li;
+      } else {
+        // H3 nests under the most recent H2
+        let sub = lastL2Li?.querySelector('ol.whitepaper-toc-sublist');
+        if (!sub) {
+          sub = document.createElement('ol');
+          sub.className = 'whitepaper-toc-sublist';
+          (lastL2Li ?? list).appendChild(sub);
+        }
+        sub.appendChild(li);
+      }
+    });
+    toc.appendChild(list);
+
+    // Insert ToC after the document's H1 (the title). If no H1, after banner.
+    const h1 = container.querySelector('h1:not(.whitepaper-toc-title)');
+    if (h1) {
+      h1.insertAdjacentElement('afterend', toc);
+    } else {
+      banner.insertAdjacentElement('afterend', toc);
+    }
+  }
+
+  // 5. Add "↑ Back to contents" link below each H2 (after the section header,
+  //    visually subtle so it doesn't compete with content). Skip the ToC's
+  //    own title H2 to avoid a back-link inside the ToC.
+  container.querySelectorAll('h2').forEach((h) => {
+    if (h.classList.contains('whitepaper-toc-title')) return;
+    if (h.nextElementSibling?.classList?.contains('whitepaper-back-to-toc')) return;
+    const back = document.createElement('div');
+    back.className = 'whitepaper-back-to-toc';
+    back.innerHTML = '<a href="#whitepaper-toc">↑ Back to contents</a>';
+    h.insertAdjacentElement('afterend', back);
+  });
+}
+
 function prefillComposer(text) {
   input.value = text;
   autosize();
@@ -1901,6 +2012,7 @@ async function exportSynthesize(mode) {
 
     previewMarkdown = received;
     await renderMarkdown(previewContent, previewMarkdown);
+    if (previewMode === 'synthesize-whitepaper') injectWhitepaperChrome(previewContent);
     previewStatus.textContent = `Done — ${received.split(/\s+/).length} words.`;
     setPreviewActionsEnabled(true);
   } catch (err) {
@@ -1937,6 +2049,7 @@ if (previewEditToggleBtn) {
       previewContent.hidden = false;
       previewContent.replaceChildren();
       await renderMarkdown(previewContent, previewMarkdown);
+      if (previewMode === 'synthesize-whitepaper') injectWhitepaperChrome(previewContent);
       previewEditToggleBtn.textContent = 'Edit markdown';
       previewEditing = false;
     }
