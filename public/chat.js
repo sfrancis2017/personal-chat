@@ -2178,12 +2178,49 @@ if (previewSaveArtifactBtn) {
 const publishDocsModal = document.getElementById('publish-docs-modal');
 const publishDocsForm = document.getElementById('publish-docs-form');
 const publishDocsTitleInput = document.getElementById('publish-docs-title-input');
+const publishDocsSection = document.getElementById('publish-docs-section');
 const publishDocsSlug = document.getElementById('publish-docs-slug');
 const publishDocsSummary = document.getElementById('publish-docs-summary');
 const publishDocsStatus = document.getElementById('publish-docs-status');
 const publishDocsSubmit = document.getElementById('publish-docs-submit');
 const publishDocsCancel = document.getElementById('publish-docs-cancel');
 const publishDocsClose = document.getElementById('publish-docs-close');
+
+// Fetch the docs site's section directories so the user can choose where
+// to publish (analysis, solution-architecture, frameworks, etc.). Called
+// when the publish modal opens. Falls back to ["analysis"] on any failure
+// so the modal still works in a degraded state.
+async function loadDocsSections() {
+  if (!publishDocsSection) return;
+  const token = getToken();
+  if (!token) return;
+  // Preserve the current selection if user had picked one
+  const previousValue = publishDocsSection.value;
+  const url = API_URL.replace(/\/chat\/?$/, '/publish-to-docs/sections');
+  try {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const body = await res.json().catch(() => ({}));
+    const sections = Array.isArray(body.sections) && body.sections.length > 0
+      ? body.sections
+      : ['analysis'];
+    publishDocsSection.innerHTML = '';
+    for (const s of sections) {
+      const opt = document.createElement('option');
+      opt.value = s;
+      opt.textContent = s;
+      publishDocsSection.appendChild(opt);
+    }
+    // Restore previous selection if still present, else default to "analysis"
+    // if it exists, else the first option.
+    if (previousValue && sections.includes(previousValue)) {
+      publishDocsSection.value = previousValue;
+    } else if (sections.includes('analysis')) {
+      publishDocsSection.value = 'analysis';
+    }
+  } catch {
+    // Network error — leave the hardcoded "analysis" option in place
+  }
+}
 
 function slugify(text) {
   return (text || '')
@@ -2209,6 +2246,10 @@ function openPublishDocsModal() {
   publishDocsCancel.disabled = false;
   publishDocsModal.hidden = false;
   document.body.style.overflow = 'hidden';
+  // Fetch live section list from the docs repo (async, populates dropdown
+  // when ready — modal opens immediately with the hardcoded fallback so
+  // there's no perceived latency).
+  loadDocsSections();
   setTimeout(() => publishDocsTitleInput?.focus(), 50);
 }
 
@@ -2262,6 +2303,7 @@ if (publishDocsForm) {
     }
     const title = publishDocsTitleInput.value.trim();
     const slug = publishDocsSlug.value.trim();
+    const section = publishDocsSection?.value?.trim() ?? 'analysis';
     const summary = publishDocsSummary.value.trim();
     if (!title) {
       publishDocsStatus.textContent = 'Title is required.';
@@ -2270,6 +2312,11 @@ if (publishDocsForm) {
     }
     if (!/^[a-z0-9][a-z0-9-]{1,79}$/.test(slug)) {
       publishDocsStatus.textContent = 'Slug must be lowercase letters, numbers, and hyphens (2–80 chars).';
+      publishDocsStatus.className = 'publish-docs-status publish-docs-status-error';
+      return;
+    }
+    if (!/^[a-z0-9][a-z0-9-]{0,60}$/.test(section)) {
+      publishDocsStatus.textContent = 'Section invalid — pick from the dropdown.';
       publishDocsStatus.className = 'publish-docs-status publish-docs-status-error';
       return;
     }
@@ -2293,7 +2340,7 @@ if (publishDocsForm) {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ title, slug, summary, markdown: md }),
+        body: JSON.stringify({ title, slug, section, summary, markdown: md }),
       });
       const text = await res.text();
       let body = {};

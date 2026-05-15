@@ -623,7 +623,7 @@ async function synthesize(
 
 const DOCS_REPO = 'sfrancis2017/docs';
 const DOCS_BRANCH = 'main';
-const DOCS_PATH_PREFIX = 'src/content/docs/analysis';
+const DOCS_CONTENT_ROOT = 'src/content/docs';
 
 // 1. Strip references — inline citations + Sources Consulted + Verification
 // checklist sections. Leave diagram contents alone (citations inside Mermaid
@@ -690,6 +690,33 @@ Rules:
     throw new Error('Voice rewrite returned empty content');
   }
   return text;
+}
+
+// List the top-level section directories under src/content/docs in the docs
+// repo. Used by the publish modal to populate a section dropdown so users
+// can choose where to land (e.g. /analysis, /solution-architecture,
+// /frameworks). Falls back gracefully on API errors.
+async function listDocsSections(env: Env): Promise<string[]> {
+  if (!env.DOCS_GITHUB_TOKEN) {
+    throw new Error('DOCS_GITHUB_TOKEN not configured');
+  }
+  const url = `https://api.github.com/repos/${DOCS_REPO}/contents/${DOCS_CONTENT_ROOT}?ref=${DOCS_BRANCH}`;
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${env.DOCS_GITHUB_TOKEN}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'chat-worker-publish/1.0',
+    },
+  });
+  if (!res.ok) {
+    throw new Error(`List sections failed: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+  }
+  const items: any[] = await res.json();
+  return items
+    .filter((i) => i?.type === 'dir' && /^[a-z0-9][a-z0-9-]*$/.test(i.name))
+    .map((i) => i.name)
+    .sort();
 }
 
 // 3. Commit a file to the docs repo. Uses GitHub's Contents API — supports
@@ -1264,6 +1291,39 @@ export default {
     //
     // Returns the GitHub commit info so the UI can link to the result.
 
+    // List the top-level section directories under src/content/docs in the
+    // docs repo. Used by the publish-to-docs modal to populate its section
+    // dropdown dynamically — no hardcoded section list to maintain.
+    if (url.pathname === '/publish-to-docs/sections' && req.method === 'GET') {
+      if (!isAuthorized(req, env)) {
+        return new Response(JSON.stringify({ error: 'unauthorized' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      if (!env.DOCS_GITHUB_TOKEN) {
+        return new Response(
+          JSON.stringify({
+            error: 'DOCS_GITHUB_TOKEN not configured on worker',
+            sections: ['analysis'],
+          }),
+          { status: 503, headers: { 'Content-Type': 'application/json', ...cors } }
+        );
+      }
+      try {
+        const sections = await listDocsSections(env);
+        return new Response(JSON.stringify({ sections }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      } catch (e: any) {
+        return new Response(
+          JSON.stringify({ error: String(e?.message ?? e), sections: ['analysis'] }),
+          { status: 502, headers: { 'Content-Type': 'application/json', ...cors } }
+        );
+      }
+    }
+
     if (url.pathname === '/publish-to-docs' && req.method === 'POST') {
       if (!isAuthorized(req, env)) {
         return new Response(JSON.stringify({ error: 'unauthorized' }), {
@@ -1293,6 +1353,11 @@ export default {
       const slug = typeof body.slug === 'string' ? body.slug.trim() : '';
       const summary = typeof body.summary === 'string' ? body.summary.trim().slice(0, 500) : '';
       const markdown = typeof body.markdown === 'string' ? body.markdown : '';
+      // Section: which top-level folder under src/content/docs/ to publish under.
+      // Defaults to "analysis" for backwards-compatible callers; can be set to
+      // any existing directory name (e.g. "solution-architecture", "frameworks").
+      // Frontend populates a dropdown from GET /publish-to-docs/sections.
+      const section = typeof body.section === 'string' ? body.section.trim() : 'analysis';
       if (!title) {
         return new Response(JSON.stringify({ error: 'title required' }), {
           status: 400,
@@ -1303,6 +1368,15 @@ export default {
         return new Response(
           JSON.stringify({
             error: 'slug must be lowercase, alphanumeric + hyphens, 2-81 chars',
+          }),
+          { status: 400, headers: { 'Content-Type': 'application/json', ...cors } }
+        );
+      }
+      // Same character set as slug — prevents path injection (no .., no slashes).
+      if (!/^[a-z0-9][a-z0-9-]{0,60}$/.test(section)) {
+        return new Response(
+          JSON.stringify({
+            error: 'section must be lowercase alphanumeric + hyphens, 1-61 chars',
           }),
           { status: 400, headers: { 'Content-Type': 'application/json', ...cors } }
         );
@@ -1331,22 +1405,23 @@ export default {
           `chat-corpus-snapshot: ${now.toISOString().slice(0, 10)}\n` +
           '---\n\n';
         const final = frontmatter + firstPerson;
-        // 4. Commit to GitHub
-        const filePath = `${DOCS_PATH_PREFIX}/${slug}.md`;
+        // 4. Commit to GitHub — path is <content-root>/<section>/<slug>.md
+        const filePath = `${DOCS_CONTENT_ROOT}/${section}/${slug}.md`;
         const result = await publishToGithub(
           filePath,
           final,
-          `Add analysis: ${title}`,
+          `Add ${section}: ${title}`,
           env
         );
         return new Response(
           JSON.stringify({
             ok: true,
+            section,
             slug,
             path: result.path,
             github_url: result.html_url,
             commit_sha: result.commit_sha,
-            docs_url: `https://docs.sajivfrancis.com/analysis/${slug}`,
+            docs_url: `https://docs.sajivfrancis.com/${section}/${slug}`,
             elapsed_ms: Date.now() - start,
           }),
           { status: 200, headers: { 'Content-Type': 'application/json', ...cors } }
