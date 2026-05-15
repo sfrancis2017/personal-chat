@@ -2475,7 +2475,7 @@ if (publishDocsForm) {
 
     publishDocsSubmit.disabled = true;
     publishDocsCancel.disabled = true;
-    publishDocsStatus.textContent = 'Stripping references → rewriting to first-person → committing to GitHub… (~20s)';
+    publishDocsStatus.textContent = 'Stripping references → rewriting to first-person → committing to GitHub… (20s for short whitepapers, up to ~3 min for long ones with 1M-tier grounding).';
     publishDocsStatus.className = 'publish-docs-status';
 
     const url = API_URL.replace(/\/chat\/?$/, '/publish-to-docs');

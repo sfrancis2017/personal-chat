@@ -699,18 +699,79 @@ Rules:
     system,
     messages: [{ role: 'user', content: md }],
   });
-  // Route through callAnthropicWithRetry instead of raw fetch so transient
-  // upstream errors (Anthropic 524 Cloudflare-origin-timeout especially —
-  // observed on long synthesis chains) get 3 retries with exponential
-  // backoff. Without this, the publish flow fails permanently on a single
-  // backend blip even though the next attempt would have succeeded.
-  const r = await callAnthropicWithRetry(body, env);
-  if (!r.ok) {
-    throw new Error(`Voice rewrite failed: HTTP ${r.status} ${(await r.text()).slice(0, 200)}`);
+  // Use streaming + collect instead of non-streaming retry. For very long
+  // whitepapers, Haiku can take 2-5 minutes to generate the full rewrite,
+  // which exceeds Cloudflare's idle-connection timeout (~100s) on
+  // non-streaming responses. Streaming keeps the connection alive
+  // token-by-token, so we can wait as long as Haiku needs to finish.
+  // Retries don't help here — each non-streaming attempt hits the same
+  // timeout. Streaming fixes the underlying issue.
+  return await callAnthropicStreamCollect(body, env);
+}
+
+// Stream-and-collect helper: call Anthropic with stream:true, accumulate
+// the text content into a single string, return when done. Used for
+// long-running generations where the non-streaming variant hits
+// Cloudflare's idle timeout. Parses Anthropic's SSE event format
+// (`event: content_block_delta` lines with `data: {...}` payload) and
+// extracts the `delta.text` from text_delta events.
+async function callAnthropicStreamCollect(
+  body: string,
+  env: Env,
+  extraHeaders: Record<string, string> = {}
+): Promise<string> {
+  // Force stream:true in the body — caller doesn't need to know.
+  const parsed: any = JSON.parse(body);
+  parsed.stream = true;
+  const streamingBody = JSON.stringify(parsed);
+
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'anthropic-version': '2023-06-01',
+      'x-api-key': env.ANTHROPIC_API_KEY,
+      ...extraHeaders,
+    },
+    body: streamingBody,
+  });
+  if (!r.ok || !r.body) {
+    const errText = r.body ? (await r.text()).slice(0, 500) : '(no body)';
+    throw new Error(`Voice rewrite failed: HTTP ${r.status} ${errText}`);
   }
-  const data: any = await r.json();
-  const text = data?.content?.[0]?.text;
-  if (typeof text !== 'string' || text.length === 0) {
+
+  const reader = r.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let text = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // Process complete lines. Anthropic SSE uses \n\n between events, but
+    // each event has multiple \n-separated lines (event:, data:, etc.).
+    let lineEnd: number;
+    while ((lineEnd = buffer.indexOf('\n')) !== -1) {
+      const line = buffer.slice(0, lineEnd);
+      buffer = buffer.slice(lineEnd + 1);
+      if (!line.startsWith('data: ')) continue;
+      const payload = line.slice(6);
+      if (payload === '[DONE]') continue;
+      try {
+        const event = JSON.parse(payload);
+        if (
+          event.type === 'content_block_delta' &&
+          event.delta?.type === 'text_delta' &&
+          typeof event.delta.text === 'string'
+        ) {
+          text += event.delta.text;
+        }
+      } catch {
+        // Skip malformed event lines silently
+      }
+    }
+  }
+  if (!text) {
     throw new Error('Voice rewrite returned empty content');
   }
   return text;
