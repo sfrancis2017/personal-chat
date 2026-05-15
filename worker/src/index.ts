@@ -652,6 +652,30 @@ function docsContentRoot(env: Env): string {
 // 1. Strip references — inline citations + Sources Consulted + Verification
 // checklist sections. Leave diagram contents alone (citations inside Mermaid
 // node labels are rare and removing them risks breaking diagram syntax).
+// Strip the leading H1 + byline from a whitepaper body before publishing
+// to docs.sajivfrancis.com. Starlight renders the frontmatter `title` as
+// the page H1, so a `# Title` line inside the body produces a duplicate
+// title. The synthesis pipeline also emits a "By Sajiv Francis · DATE"
+// byline below the H1, which the Haiku voice rewrite mangles into
+// "By Me · DATE" — neither version belongs on the docs page (frontmatter
+// already carries `published-at`). Drop both, plus any leading blank lines.
+function stripDocsHeader(md: string): string {
+  const lines = md.split('\n');
+  let i = 0;
+  // Skip leading blank lines
+  while (i < lines.length && lines[i].trim() === '') i++;
+  // Drop a single leading H1 if present
+  if (i < lines.length && /^#\s+\S/.test(lines[i])) i++;
+  // Skip blank lines between H1 and byline
+  while (i < lines.length && lines[i].trim() === '') i++;
+  // Drop a byline of the form "By <something>" — covers "By Sajiv Francis · July 2025",
+  // "By Me · July 2025", "*By Sajiv Francis*", etc. Match italicized or plain.
+  if (i < lines.length && /^\*?By\s+\S/i.test(lines[i].trim())) i++;
+  // Skip blank lines after byline
+  while (i < lines.length && lines[i].trim() === '') i++;
+  return lines.slice(i).join('\n');
+}
+
 function stripReferences(md: string): string {
   let out = md;
   // Inline citations like *(Book — chapter)* or *(SourceFile.md)*. The
@@ -1509,6 +1533,10 @@ export default {
         const stripped = stripReferences(markdown);
         // 2. Rewrite third-person → first-person (Haiku, ~$0.02 per call)
         const firstPerson = await rewriteToFirstPerson(stripped, env);
+        // 2b. Drop the duplicate H1 + byline. Starlight renders the
+        // frontmatter `title` as the page H1, and `published-at` carries
+        // the date — neither needs to repeat inside the body.
+        const trimmed = stripDocsHeader(firstPerson);
         // 3. Build frontmatter
         const now = new Date();
         const frontmatter =
@@ -1519,7 +1547,7 @@ export default {
           `published-at: ${now.toISOString()}\n` +
           `chat-corpus-snapshot: ${now.toISOString().slice(0, 10)}\n` +
           '---\n\n';
-        const final = frontmatter + firstPerson;
+        const final = frontmatter + trimmed;
         // 4. Commit to GitHub — path is <content-root>/<section>/<slug>.md
         const filePath = `${docsContentRoot(env)}/${section}/${slug}.md`;
         const result = await publishToGithub(
