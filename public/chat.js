@@ -471,25 +471,28 @@ function renderSourceChips() {
   if (!sourceChipsRow || !sourceChips) return;
   sourceChipsRow.replaceChildren();
   const owner = isOwnerMode();
+
+  // Non-owners: always hide the row entirely, even if selectedSources has
+  // stale entries from a previous owner-mode session. Owner-only feature;
+  // public mode shouldn't see any source-pinning UI.
+  if (!owner) {
+    sourceChips.hidden = true;
+    if (confidenceToggle) confidenceToggle.checked = false;
+    return;
+  }
+
+  // Owner mode below — row stays visible so the High-confidence toggle is
+  // always discoverable.
+  sourceChips.hidden = false;
   if (selectedSources.size === 0) {
-    // Non-owners: hide the row entirely — they can't pin sources anyway.
-    if (!owner) {
-      sourceChips.hidden = true;
-      if (confidenceToggle) confidenceToggle.checked = false;
-      return;
-    }
-    // Owner with no sources: keep the row visible so the High-confidence
-    // toggle is always discoverable. Show a placeholder hint instead of chips.
-    // Toggle state preserved (don't auto-clear) — user might be "arming" it
-    // before pinning sources.
-    sourceChips.hidden = false;
+    // Empty state: placeholder hint. Toggle state preserved (don't auto-clear)
+    // so users can "arm" confidence mode before pinning sources.
     const placeholder = document.createElement('span');
     placeholder.className = 'source-chips-empty';
     placeholder.textContent = 'No sources pinned — pin from Library for grounded retrieval';
     sourceChipsRow.appendChild(placeholder);
     return;
   }
-  sourceChips.hidden = false;
   for (const [path, meta] of selectedSources) {
     const chip = document.createElement('button');
     chip.type = 'button';

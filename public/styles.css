@@ -900,33 +900,48 @@ a:hover { text-decoration: underline; }
   white-space: pre-wrap;
 }
 
-/* High-confidence toggle — now inline inside the source-chips row,
-   so it only appears when sources are pinned (which is also required for
-   confidence mode to do anything useful). No bottom-of-screen strip on mobile. */
+/* High-confidence toggle — inline inside the source-chips row.
+   Styled to be visually prominent so it's not missed against the source
+   chips. Active state uses the accent color + filled background. */
 .confidence-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  font-size: 0.72rem;
-  color: var(--color-fg-muted);
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  color: var(--color-fg);
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
+  font-weight: 500;
 }
 .confidence-toggle input[type="checkbox"] {
   margin: 0;
   cursor: pointer;
-}
-.confidence-toggle input[type="checkbox"]:checked + .confidence-label-text {
-  color: var(--color-accent, #1565c0);
-  font-weight: 600;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-accent, #1565c0);
 }
 .source-chips-confidence {
   margin-left: auto;
-  padding: 0.2rem 0.5rem;
+  padding: 0.35rem 0.65rem;
   border-radius: var(--radius-md);
   background: var(--color-bg);
-  border: 1px solid var(--color-border);
+  border: 1.5px solid var(--color-accent, #1565c0);
+  color: var(--color-accent, #1565c0);
+  transition: background 120ms ease, color 120ms ease;
+}
+.source-chips-confidence:hover {
+  background: var(--color-accent, #1565c0);
+  color: white;
+}
+/* When the toggle is checked, the whole label "lights up" so the active
+   state is obvious at a glance. */
+.source-chips-confidence:has(input:checked) {
+  background: var(--color-accent, #1565c0);
+  color: white;
+}
+.source-chips-confidence:has(input:checked) .confidence-label-text {
+  font-weight: 600;
 }
 
 /* Placeholder shown in the source-chips row when in owner mode but nothing
