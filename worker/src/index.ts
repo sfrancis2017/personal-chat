@@ -672,19 +672,19 @@ Rules:
 
   const body = JSON.stringify({
     model: haikuModel,
-    max_tokens: 16384,
+    // 32k matches the synthesis output cap — voice rewrite preserves input
+    // length, so a 20k-token whitepaper needs 20k+ output capacity, otherwise
+    // the rewrite gets truncated mid-document. Haiku 4.5 supports up to 64k.
+    max_tokens: 32768,
     system,
     messages: [{ role: 'user', content: md }],
   });
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'anthropic-version': '2023-06-01',
-      'x-api-key': env.ANTHROPIC_API_KEY,
-    },
-    body,
-  });
+  // Route through callAnthropicWithRetry instead of raw fetch so transient
+  // upstream errors (Anthropic 524 Cloudflare-origin-timeout especially —
+  // observed on long synthesis chains) get 3 retries with exponential
+  // backoff. Without this, the publish flow fails permanently on a single
+  // backend blip even though the next attempt would have succeeded.
+  const r = await callAnthropicWithRetry(body, env);
   if (!r.ok) {
     throw new Error(`Voice rewrite failed: HTTP ${r.status} ${(await r.text()).slice(0, 200)}`);
   }
