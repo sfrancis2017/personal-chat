@@ -810,6 +810,17 @@ a:hover { text-decoration: underline; }
   justify-content: flex-end;
   padding: 0.5rem 1.25rem 1rem;
 }
+/* These three sections use display: flex which would normally override the
+   browser's UA `[hidden] { display: none }` rule. Explicit [hidden] rule
+   at higher specificity (class + attribute) so toggling .hidden = true
+   from JS actually hides them. Without this, error states leak through
+   stale "success" labels (e.g. "✓ Downloaded" rows visible after a 502). */
+.synth-all-progress[hidden],
+.synth-all-result[hidden],
+.synth-all-saved[hidden],
+.synth-all-error[hidden] {
+  display: none;
+}
 .synth-all-progress {
   display: flex;
   flex-direction: column;

@@ -514,9 +514,16 @@ async function callAnthropicWithRetry(
       },
       body,
     });
-    // Retry on rate limits (429) and overload (529) with exponential backoff.
-    // Both are transient; other 4xx are permanent and should surface immediately.
-    if ((res.status === 429 || res.status === 529) && attempt < maxRetries) {
+    // Retry on transient upstream errors with exponential backoff.
+    //   - 429: rate limit
+    //   - 502/503/504: upstream gateway / service unavailable / gateway timeout
+    //   - 524: Cloudflare origin timeout (Anthropic's edge took too long to
+    //     reply — common on long synthesis calls in the 1M-context tier)
+    //   - 529: site overloaded
+    // Other 4xx (e.g. 400 invalid request, 401 bad key) are permanent and
+    // surface immediately so we don't hide real problems behind retries.
+    const TRANSIENT_STATUSES = new Set([429, 502, 503, 504, 524, 529]);
+    if (TRANSIENT_STATUSES.has(res.status) && attempt < maxRetries) {
       const delay = 1000 * Math.pow(2, attempt); // 1s, 2s, 4s
       await new Promise((r) => setTimeout(r, delay));
       continue;
