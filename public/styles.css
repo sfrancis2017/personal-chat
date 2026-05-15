@@ -1935,7 +1935,12 @@ body.sidebar-collapsed .sidebar {
     padding: 0.5rem !important;
   }
   .mermaid-block svg {
-    width: 100% !important;
+    /* Cap at container width so dense diagrams don't bleed off the page,
+       but allow smaller diagrams to render at intrinsic size instead of
+       being stretched. Same behavior as the screen rule. The whitepaper
+       PDF (body.printing-preview class) gets a stricter 6.5in cap via a
+       more-specific selector further down. */
+    max-width: 100% !important;
     height: auto !important;
   }
 
