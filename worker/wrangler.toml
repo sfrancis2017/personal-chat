@@ -7,6 +7,10 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 ALLOWED_ORIGINS = "https://chat.sajivfrancis.com,https://sajivfrancis.com,https://www.sajivfrancis.com,http://localhost:8000,http://127.0.0.1:8000,http://localhost:4321,http://127.0.0.1:4321,http://localhost:3000,http://127.0.0.1:3000"
 ANTHROPIC_MODEL = "claude-sonnet-4-6"
+# Docs repo default branch. Verified via:
+#   curl -s https://api.github.com/repos/sfrancis2017/docs | grep '"default_branch"'
+# Worker defaults to "main" if unset; this repo uses "master" (older convention).
+DOCS_BRANCH = "master"
 
 [[kv_namespaces]]
 binding = "RATE_LIMIT_KV"
