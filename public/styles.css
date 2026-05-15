@@ -1128,6 +1128,11 @@ body.sidebar-collapsed .sidebar {
   cursor: pointer;
   transition: background 120ms ease;
 }
+/* `display: flex` above outranks the browser's UA `[hidden] { display: none }`
+   rule on specificity, so synthesize-* items kept appearing in public mode
+   despite `btn.hidden = true`. This higher-specificity rule restores the
+   hide. Needed for the public-mode synthesis-menu gate to work. */
+.export-menu-item[hidden] { display: none; }
 .export-menu-item:hover { background: var(--color-bg); }
 .export-menu-item strong {
   font-size: 0.875rem;
