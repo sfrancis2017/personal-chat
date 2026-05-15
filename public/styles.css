@@ -929,6 +929,15 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--color-border);
 }
 
+/* Placeholder shown in the source-chips row when in owner mode but nothing
+   is pinned yet. Keeps the row visible so the High-confidence toggle is
+   always discoverable. */
+.source-chips-empty {
+  font-size: 0.75rem;
+  color: var(--color-fg-muted);
+  font-style: italic;
+}
+
 .sidebar-foot {
   padding: 0.625rem 1rem;
   border-top: 1px solid var(--color-border);

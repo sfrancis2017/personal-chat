@@ -99,6 +99,9 @@ function refreshAuthGatedUI() {
   // Saved Artifacts panel — owner-only (work-tool's read source)
   if (sidebarArtifactsEl) sidebarArtifactsEl.hidden = !owner;
   if (owner) loadArtifacts();
+  // Re-render source-chips row — owner mode now keeps it visible even when
+  // empty (placeholder + High-confidence toggle), public mode hides it.
+  renderSourceChips();
   // Sidebar history is local to the device. Hide for public visitors —
   // less chrome on a clean read-only chat surface.
   const sidebarList = document.getElementById('sidebar-list');
@@ -356,14 +359,18 @@ function renderLibrary() {
       const isSelected = selectedSources.has(s.source_path);
       const owner = isOwnerMode();
       // Owner-only: clickable visibility chip that flips public ↔ private.
-      // Anonymous visitors don't see the chip; they only see the inherited
-      // "pub" badge styling via the ::after pseudo-element on data-visibility.
-      const visChip = owner && s.visibility
-        ? `<button type="button" class="library-source-vis library-source-vis-${escapeHtml(s.visibility)}"
+      // Always rendered in owner mode so legacy chunks (ingested before the
+      // visibility metadata field was added — `s.visibility` is null) can
+      // also be controlled. Null/missing visibility is treated as 'private'
+      // because the public-mode SQL filter (`metadata->>'visibility' = 'public'`)
+      // excludes them already — so the display matches their actual behavior.
+      const visState = s.visibility === 'public' ? 'public' : 'private';
+      const visChip = owner
+        ? `<button type="button" class="library-source-vis library-source-vis-${visState}"
                    data-source-path="${escapeHtml(s.source_path)}"
-                   data-current="${escapeHtml(s.visibility)}"
-                   title="Currently ${escapeHtml(s.visibility)} — click to flip"
-                   aria-label="Toggle visibility (currently ${escapeHtml(s.visibility)})">${escapeHtml(s.visibility)}</button>`
+                   data-current="${visState}"
+                   title="Currently ${visState} — click to flip"
+                   aria-label="Toggle visibility (currently ${visState})">${visState}</button>`
         : '';
       row.innerHTML = `
         <input type="checkbox" class="library-source-checkbox"
@@ -393,7 +400,7 @@ function renderLibrary() {
           // Don't toggle the row's checkbox when clicking the chip
           e.preventDefault();
           e.stopPropagation();
-          const current = visBtn.dataset.current;
+          const current = visBtn.dataset.current;  // 'public' | 'private' (never null)
           const next = current === 'public' ? 'private' : 'public';
           if (!confirm(
             `Move "${s.title || s.source_path}" to ${next} visibility?\n\n` +
@@ -463,11 +470,23 @@ function estimatePinnedTokens() {
 function renderSourceChips() {
   if (!sourceChipsRow || !sourceChips) return;
   sourceChipsRow.replaceChildren();
+  const owner = isOwnerMode();
   if (selectedSources.size === 0) {
-    sourceChips.hidden = true;
-    // Auto-clear confidence toggle when no sources remain — confidence mode
-    // requires source pinning, so a hidden-but-checked state is confusing.
-    if (confidenceToggle) confidenceToggle.checked = false;
+    // Non-owners: hide the row entirely — they can't pin sources anyway.
+    if (!owner) {
+      sourceChips.hidden = true;
+      if (confidenceToggle) confidenceToggle.checked = false;
+      return;
+    }
+    // Owner with no sources: keep the row visible so the High-confidence
+    // toggle is always discoverable. Show a placeholder hint instead of chips.
+    // Toggle state preserved (don't auto-clear) — user might be "arming" it
+    // before pinning sources.
+    sourceChips.hidden = false;
+    const placeholder = document.createElement('span');
+    placeholder.className = 'source-chips-empty';
+    placeholder.textContent = 'No sources pinned — pin from Library for grounded retrieval';
+    sourceChipsRow.appendChild(placeholder);
     return;
   }
   sourceChips.hidden = false;
