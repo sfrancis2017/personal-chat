@@ -755,6 +755,14 @@ a:hover { text-decoration: underline; }
   line-height: 1;
 }
 .artifacts-action:hover { background: var(--color-bg-elevated); color: var(--color-fg); }
+.artifacts-open {
+  color: var(--color-accent, #1565c0);
+  border-color: var(--color-accent, #1565c0);
+}
+.artifacts-open:hover {
+  background: var(--color-accent, #1565c0);
+  color: white;
+}
 .artifacts-delete { color: #c0392b; }
 .artifacts-delete:hover { background: #fee; color: #c0392b; }
 

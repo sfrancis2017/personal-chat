@@ -654,10 +654,15 @@ function renderArtifacts() {
         <div class="artifacts-row-meta">${escapeHtml(modeShort)} · ${escapeHtml(dateStr)}</div>
       </div>
       <div class="artifacts-row-actions">
+        <button type="button" class="artifacts-action artifacts-open" title="Open in preview (edit, export, or publish to docs without re-synthesizing)">open</button>
         <button type="button" class="artifacts-action artifacts-copy" title="Copy artifact id to clipboard">copy id</button>
         <button type="button" class="artifacts-action artifacts-delete" title="Delete this artifact">×</button>
       </div>
     `;
+    row.querySelector('.artifacts-open').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await openArtifact(a.id);
+    });
     row.querySelector('.artifacts-copy').addEventListener('click', async (e) => {
       e.stopPropagation();
       try {
@@ -675,6 +680,71 @@ function renderArtifacts() {
     });
     artifactsListEl.appendChild(row);
   }
+}
+
+// Open a saved artifact back into the preview modal so it can be reviewed,
+// edited, re-saved, exported as PDF, or published to docs without
+// re-synthesizing. Handles all modes:
+//   - 'all'                   → opens the whitepaper (most common publish target)
+//   - 'synthesize-whitepaper' → opens the whitepaper
+//   - 'synthesize-slides'     → opens slides
+//   - 'synthesize-email'      → opens email
+async function openArtifact(id) {
+  const token = getToken();
+  if (!token) {
+    alert('Owner mode required.');
+    return;
+  }
+  let artifact;
+  try {
+    const r = await fetch(`${ARTIFACTS_URL}/${encodeURIComponent(id)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!r.ok) {
+      const text = await r.text();
+      throw new Error(`HTTP ${r.status}: ${text.slice(0, 200)}`);
+    }
+    artifact = await r.json();
+  } catch (err) {
+    alert(`Failed to load artifact: ${err?.message ?? err}`);
+    return;
+  }
+  // Map artifact.mode → preview mode + which markdown to load. For 'all',
+  // default to the whitepaper since it's the publish-to-docs target.
+  let markdown = '';
+  let mode = 'synthesize-whitepaper';
+  if (artifact?.mode === 'synthesize-slides') {
+    markdown = artifact.artifacts?.slides ?? '';
+    mode = 'synthesize-slides';
+  } else if (artifact?.mode === 'synthesize-email') {
+    markdown = artifact.artifacts?.email ?? '';
+    mode = 'synthesize-email';
+  } else {
+    markdown = artifact?.artifacts?.whitepaper ?? '';
+    mode = 'synthesize-whitepaper';
+  }
+  if (!markdown) {
+    alert(`Artifact ${id} has no ${mode.replace('synthesize-', '')} content.`);
+    return;
+  }
+  // Open preview using the existing modal pipeline. Render the markdown +
+  // apply whitepaper chrome if applicable. Set status so user knows this
+  // is a re-loaded artifact, not a fresh synthesis.
+  openPreview(mode);
+  previewMarkdown = markdown;
+  const created = artifact.created_at ? new Date(artifact.created_at) : null;
+  const dateStr = created
+    ? `${created.toLocaleDateString()} ${created.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+    : '';
+  if (previewStatus) {
+    previewStatus.textContent = `Loaded artifact ${artifact.id}${dateStr ? ' (saved ' + dateStr + ')' : ''}.`;
+  }
+  if (previewSubtitle && artifact.source_chat_title) {
+    previewSubtitle.textContent = `Originally from: ${artifact.source_chat_title}`;
+  }
+  await renderMarkdown(previewContent, previewMarkdown);
+  if (mode === 'synthesize-whitepaper') injectWhitepaperChrome(previewContent);
+  setPreviewActionsEnabled(true);
 }
 
 // Flip a source's visibility between 'public' and 'private'. Owner-only.
