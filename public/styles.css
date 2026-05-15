@@ -569,6 +569,29 @@ a:hover { text-decoration: underline; }
   line-height: 1;
 }
 
+/* Token-budget + injection-mode badge appended to the source-chips row */
+.source-chip-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.7rem;
+  color: var(--color-fg-muted);
+  background: transparent;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  margin-left: 0.25rem;
+  font-variant-numeric: tabular-nums;
+}
+.source-chip-status-inject {
+  color: #2e7d32;
+  border-color: #2e7d32;
+  border-style: solid;
+}
+.source-chip-status-fallback {
+  color: #b45309;
+  border-color: #b45309;
+}
+
 /* Confidence-mode toggle row — single horizontal strip above the composer */
 .confidence-row {
   padding: 0.25rem 1.25rem 0.4rem;

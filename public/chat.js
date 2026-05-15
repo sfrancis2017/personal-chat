@@ -87,7 +87,15 @@ function refreshAuthGatedUI() {
   if (uploadDocBtn) uploadDocBtn.hidden = !owner;
   const skillWrap = document.querySelector('.skill-select-wrap');
   if (skillWrap) skillWrap.hidden = !owner;
-  if (exportTriggerBtn) exportTriggerBtn.hidden = !owner;
+  // Export trigger stays visible to everyone — raw-PDF export is cheap.
+  // The synthesis options inside the dropdown are individually gated below.
+  if (exportTriggerBtn) exportTriggerBtn.hidden = false;
+  // Synthesis menu items (whitepaper/slides/email/all) are Claude-heavy —
+  // owner-only. Server-side enforcement is already in place; this hides them
+  // from the UI too so public visitors don't see options they can't use.
+  document.querySelectorAll('.export-menu-item[data-export^="synthesize-"]').forEach((btn) => {
+    btn.hidden = !owner;
+  });
   // Sidebar history is local to the device. Hide for public visitors —
   // less chrome on a clean read-only chat surface.
   const sidebarList = document.getElementById('sidebar-list');
@@ -395,8 +403,31 @@ function renderLibrarySelectionSummary() {
   }
 }
 
+// Approx upper-bound tokens per chunk (ingest_core uses CHUNK_TOKENS=1000).
+// Used for the budget estimate when deciding direct-injection vs retrieval.
+const TOKENS_PER_CHUNK_ESTIMATE = 1000;
+const INJECTION_BUDGET_TOKENS = 150_000;
+
+// Sum estimated tokens across all currently pinned sources, looked up from
+// libraryData (each source has a `chunks` count from the /library endpoint).
+function estimatePinnedTokens() {
+  if (!libraryData) return 0;
+  let total = 0;
+  for (const path of selectedSources.keys()) {
+    for (const t of libraryData.topics ?? []) {
+      const s = t.sources?.find((x) => x.source_path === path);
+      if (s) {
+        total += (s.chunks ?? 0) * TOKENS_PER_CHUNK_ESTIMATE;
+        break;
+      }
+    }
+  }
+  return total;
+}
+
 // Renders the source-chips row above the composer. Each chip = one pinned
-// source; click × to remove.
+// source; click × to remove. Also renders the injection-mode indicator
+// (full injection vs retrieval fallback vs out-of-confidence-mode).
 function renderSourceChips() {
   if (!sourceChipsRow || !sourceChips) return;
   sourceChipsRow.replaceChildren();
@@ -424,6 +455,26 @@ function renderSourceChips() {
     });
     sourceChipsRow.appendChild(chip);
   }
+
+  // Append a small status badge: shows token estimate + which mode will run
+  // (full injection vs retrieval-within-filter) for the next chat turn.
+  const est = estimatePinnedTokens();
+  const confidence = !!confidenceToggle?.checked;
+  const status = document.createElement('span');
+  status.className = 'source-chip-status';
+  if (!confidence) {
+    status.textContent = `${Math.round(est / 1000)}k tokens — retrieval (top-K) within scope`;
+    status.title = 'Turn on High-confidence mode for full-content injection when budget fits';
+  } else if (est <= INJECTION_BUDGET_TOKENS) {
+    status.textContent = `${Math.round(est / 1000)}k / 150k tokens — full injection ✓`;
+    status.classList.add('source-chip-status-inject');
+    status.title = 'Claude will see ALL chunks from the pinned sources';
+  } else {
+    status.textContent = `${Math.round(est / 1000)}k tokens — exceeds 150k budget, top-K fallback`;
+    status.classList.add('source-chip-status-fallback');
+    status.title = 'Too much pinned content for full injection — falls back to top-K=15 within scope';
+  }
+  sourceChipsRow.appendChild(status);
 }
 
 // Persist selectedSources to the active chat thread so re-opens the same
@@ -460,6 +511,11 @@ function loadSourceSelectionsFromActiveChat() {
 // Wire search input and clear button.
 if (librarySearchEl) {
   librarySearchEl.addEventListener('input', () => renderLibrary());
+}
+// Re-render the source-chip status (token estimate + injection-mode badge)
+// when the confidence toggle flips, so the user sees the mode change live.
+if (confidenceToggle) {
+  confidenceToggle.addEventListener('change', () => renderSourceChips());
 }
 if (librarySelectionClearBtn) {
   librarySelectionClearBtn.addEventListener('click', () => {
@@ -1039,6 +1095,15 @@ composer.addEventListener('submit', async (e) => {
         'Open the Library, search for the documents you want grounded against, and check them.'
       );
     }
+    // Direct-injection decision: only requested when confidence mode is on
+    // AND sources are pinned AND the estimate fits the worker's budget.
+    // Worker re-validates with its own budget cap before honoring.
+    const estTokens = estimatePinnedTokens();
+    const injectFull =
+      confidenceMode &&
+      selectedSources.size > 0 &&
+      estTokens > 0 &&
+      estTokens <= INJECTION_BUDGET_TOKENS;
 
     const res = await fetch(API_URL, {
       method: 'POST',
@@ -1049,6 +1114,8 @@ composer.addEventListener('submit', async (e) => {
         skill: chat.skill ?? '',
         source_paths: [...selectedSources.keys()],
         confidence_mode: confidenceMode,
+        inject_full: injectFull,
+        inject_full_estimate: estTokens,
       }),
     });
 

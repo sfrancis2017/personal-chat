@@ -259,16 +259,29 @@ class Handler(BaseHTTPRequestHandler):
         if isinstance(raw_top_k, int) and raw_top_k > 0:
             top_k_override = min(max(raw_top_k, 1), 30)
 
+        # Direct-injection flag: when true AND source_paths is set, skip the
+        # top-K retrieval entirely and return ALL chunks from those sources,
+        # ordered by source then by insertion id (≈ document order). This is
+        # how High-confidence mode achieves "Claude has read the whole pinned
+        # material" grounding when total content fits the prompt budget.
+        # The worker decides whether the budget allows full injection.
+        inject_full = bool(body.get("inject_full")) and bool(source_paths_filter)
+
         t_start = time.time()
         conn = _get_conn()
         try:
-            chunks, score_map = _hybrid_retrieve(
-                conn, embedding, query_text, topic_filter, vis_filter,
-                source_paths=source_paths_filter,
-            )
-            # MMR diversification on the fused candidate set
-            k = top_k_override if top_k_override is not None else TOP_K
-            chunks = _mmr_select(chunks, embedding, k=k, lam=MMR_LAMBDA)
+            if inject_full:
+                chunks, score_map = _fetch_all_from_sources(
+                    conn, source_paths_filter, vis_filter
+                )
+            else:
+                chunks, score_map = _hybrid_retrieve(
+                    conn, embedding, query_text, topic_filter, vis_filter,
+                    source_paths=source_paths_filter,
+                )
+                # MMR diversification on the fused candidate set
+                k = top_k_override if top_k_override is not None else TOP_K
+                chunks = _mmr_select(chunks, embedding, k=k, lam=MMR_LAMBDA)
             payload_chunks = [
                 {
                     "source_url": c["source_url"],
@@ -305,6 +318,58 @@ class Handler(BaseHTTPRequestHandler):
 
 def _vec_literal(embedding: list[float]) -> str:
     return "[" + ",".join(str(float(x)) for x in embedding) + "]"
+
+
+def _fetch_all_from_sources(
+    conn,
+    source_paths: list[str],
+    vis_filter: list[str] | None,
+) -> tuple[list[dict], dict]:
+    """
+    Direct-injection path: return ALL active chunks from the given sources,
+    ordered by source_path then by insertion order (≈ document order).
+    No top-K, no MMR, no embedding scoring — used when the worker has
+    determined that the total content fits the prompt budget.
+
+    The caller is responsible for the budget check. This function trusts
+    that the source list is small enough to inject in full.
+    """
+    cur = conn.cursor()
+    where = ["valid_until IS NULL", "source_path = ANY(%s)"]
+    params: list = [source_paths]
+    if vis_filter:
+        where.append("metadata->>'visibility' = ANY(%s)")
+        params.append(vis_filter)
+    cur.execute(
+        f"""
+        SELECT source_url, source_path, text, topic, metadata, embedding
+        FROM chunks
+        WHERE {' AND '.join(where)}
+        ORDER BY source_path, id
+        """,
+        tuple(params),
+    )
+    rows = cur.fetchall()
+    candidates: list[dict] = []
+    score_map: dict[str, dict] = {}
+    for i, r in enumerate(rows):
+        emb = r[5]
+        if emb is not None and hasattr(emb, "tolist"):
+            emb = emb.tolist()
+        path = r[1]
+        candidates.append({
+            "source_url": r[0],
+            "source_path": path,
+            "text": r[2],
+            "topic": r[3],
+            "metadata": r[4],
+            "embedding": emb if emb is not None else [],
+        })
+        # Lightweight score map for logging — record position rather than
+        # fused/rank since we're not doing relevance scoring here.
+        if path not in score_map:
+            score_map[path] = {"fused": 1.0, "injection": True, "position": i}
+    return candidates, score_map
 
 
 def _hybrid_retrieve(

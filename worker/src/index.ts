@@ -134,6 +134,21 @@ interface ChatRequest {
    */
   confidence_mode?: boolean;
   /**
+   * Direct-injection request. When true AND confidence_mode is true AND
+   * source_paths is non-empty AND the client's estimated total token count
+   * fits the worker's budget cap (150k tokens), the worker tells the droplet
+   * to return ALL chunks from the pinned sources (no top-K, no MMR).
+   * Claude then sees the whole pinned material as grounding — eliminates
+   * retrieval sampling for work-grade precision.
+   */
+  inject_full?: boolean;
+  /**
+   * Client-computed upper-bound token estimate for the pinned sources
+   * (chunks × ~1000 tokens). Used by the worker's budget check before
+   * honoring inject_full. The client should be conservative.
+   */
+  inject_full_estimate?: number;
+  /**
    * 'chat' (default): normal RAG chat turn.
    * 'synthesize-whitepaper': synthesize the conversation into a polished whitepaper
    *   markdown. Skips RAG retrieval (the chat is the source).
@@ -397,7 +412,7 @@ async function getContext(
   mode: AuthMode,
   clientId: string,
   env: Env,
-  opts: { sourcePaths?: string[]; topK?: number } = {}
+  opts: { sourcePaths?: string[]; topK?: number; injectFull?: boolean } = {}
 ): Promise<RetrievedContext> {
   const hydeText = await hyde(query, env);
   const embedding = await embedQuery(hydeText, env);
@@ -421,6 +436,9 @@ async function getContext(
   if (visibility && visibility.length) body.visibility = visibility;
   if (cleanSourcePaths.length) body.source_paths = cleanSourcePaths;
   if (opts.topK && opts.topK > 0) body.top_k = opts.topK;
+  // Direct injection — droplet returns ALL chunks from source_paths, no top-K,
+  // ordered by document position. Only honored when source_paths is also set.
+  if (opts.injectFull && cleanSourcePaths.length) body.inject_full = true;
 
   try {
     const r = await fetch(env.RETRIEVE_URL, {
@@ -1292,6 +1310,28 @@ export default {
       // path to anonymous visitors.
       const confidenceMode = !!body.confidence_mode && authMode === 'owner';
 
+      // Direct-injection decision: when High-confidence mode is on AND sources
+      // are pinned AND the client signals inject_full (it ran the budget check
+      // using cached library data), bypass retrieval and send ALL chunks from
+      // those sources to Claude. Worker also re-applies an upper-bound budget
+      // check to defend against a misconfigured client. ~150k token cap leaves
+      // ~50k headroom for chat history + system prompt + response budget.
+      const MAX_INJECT_BUDGET_TOKENS = 150_000;
+      const reqInjectFull =
+        !!body.inject_full &&
+        confidenceMode &&
+        Array.isArray(body.source_paths) &&
+        body.source_paths.length > 0;
+      // Worker can't know exact token count without fetching all chunks first,
+      // so we trust the client's pre-check. If droplet returns more than the
+      // safe ceiling, we'd hit a downstream Anthropic 400 — the client should
+      // be conservative on its estimate. ~1000 tokens per chunk is the typical
+      // upper bound from ingest_core (CHUNK_TOKENS=1000).
+      const clientEstimate = typeof body.inject_full_estimate === 'number'
+        ? body.inject_full_estimate
+        : 0;
+      const injectFull = reqInjectFull && clientEstimate <= MAX_INJECT_BUDGET_TOKENS;
+
       // Skip RAG retrieval when synthesizing — the chat is the source of truth.
       let chunks: Chunk[] = [];
       if (!synthesizing) {
@@ -1300,10 +1340,11 @@ export default {
         const visibility = authMode === 'public' ? ['public'] : undefined;
         const ctx = await getContext(query, body.topics, visibility, authMode, clientId, env, {
           sourcePaths: body.source_paths,
-          // Confidence mode widens the retrieved chunk count from default 6 → 15.
-          // Source-path filter usually narrows the candidate pool, so a higher K
-          // here still fits comfortably in the prompt budget.
-          topK: confidenceMode ? 15 : undefined,
+          // Confidence mode without direct injection widens top-K to 15 within
+          // the source-path filter. With direct injection, top-K is irrelevant
+          // (droplet returns all chunks from the pinned sources).
+          topK: confidenceMode && !injectFull ? 15 : undefined,
+          injectFull,
         });
         chunks = ctx.chunks;
       }
