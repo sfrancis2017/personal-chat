@@ -763,6 +763,13 @@ a:hover { text-decoration: underline; }
   background: var(--color-accent, #1565c0);
   color: white;
 }
+/* For 'all'-mode artifacts, three open buttons (WP/slides/email) sit
+   side by side. Tighten padding so they fit alongside copy + delete
+   without wrapping. */
+.artifacts-row-actions .artifacts-open[data-target] {
+  padding: 0.12rem 0.3rem;
+  font-size: 0.6rem;
+}
 .artifacts-delete { color: #c0392b; }
 .artifacts-delete:hover { background: #fee; color: #c0392b; }
 

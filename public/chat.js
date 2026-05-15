@@ -648,20 +648,33 @@ function renderArtifacts() {
       a.mode === 'synthesize-slides' ? 'slides' :
       a.mode === 'synthesize-email' ? 'email' :
       (a.mode || '');
+    // For bulk 'all' artifacts, give the user three explicit open targets
+    // (whitepaper / slides / email). For mode-specific artifacts, a single
+    // "open" button is enough.
+    const openButtons = a.mode === 'all'
+      ? `
+        <button type="button" class="artifacts-action artifacts-open" data-target="whitepaper" title="Open whitepaper in preview">WP</button>
+        <button type="button" class="artifacts-action artifacts-open" data-target="slides" title="Open slides in preview">slides</button>
+        <button type="button" class="artifacts-action artifacts-open" data-target="email" title="Open email in preview">email</button>
+      `
+      : `<button type="button" class="artifacts-action artifacts-open" title="Open in preview (edit, export, or publish to docs without re-synthesizing)">open</button>`;
     row.innerHTML = `
       <div class="artifacts-row-main">
         <div class="artifacts-row-title">${escapeHtml(a.title || a.id)}</div>
         <div class="artifacts-row-meta">${escapeHtml(modeShort)} · ${escapeHtml(dateStr)}</div>
       </div>
       <div class="artifacts-row-actions">
-        <button type="button" class="artifacts-action artifacts-open" title="Open in preview (edit, export, or publish to docs without re-synthesizing)">open</button>
+        ${openButtons}
         <button type="button" class="artifacts-action artifacts-copy" title="Copy artifact id to clipboard">copy id</button>
         <button type="button" class="artifacts-action artifacts-delete" title="Delete this artifact">×</button>
       </div>
     `;
-    row.querySelector('.artifacts-open').addEventListener('click', async (e) => {
-      e.stopPropagation();
-      await openArtifact(a.id);
+    // Wire all open buttons (one for mode-specific, three for 'all' bulk artifacts)
+    row.querySelectorAll('.artifacts-open').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await openArtifact(a.id, btn.dataset.target);
+      });
     });
     row.querySelector('.artifacts-copy').addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -685,11 +698,16 @@ function renderArtifacts() {
 // Open a saved artifact back into the preview modal so it can be reviewed,
 // edited, re-saved, exported as PDF, or published to docs without
 // re-synthesizing. Handles all modes:
-//   - 'all'                   → opens the whitepaper (most common publish target)
+//   - 'all'                   → opens whichever part the user picked (WP/slides/email)
 //   - 'synthesize-whitepaper' → opens the whitepaper
 //   - 'synthesize-slides'     → opens slides
 //   - 'synthesize-email'      → opens email
-async function openArtifact(id) {
+//
+// `target` is optional: 'whitepaper' | 'slides' | 'email'. Used for 'all'
+// mode artifacts where the user explicitly picks which part to open via
+// the three per-mode buttons in the sidebar row. For mode-specific
+// artifacts, target is ignored — the single stored markdown is opened.
+async function openArtifact(id, target) {
   const token = getToken();
   if (!token) {
     alert('Owner mode required.');
@@ -709,11 +727,14 @@ async function openArtifact(id) {
     alert(`Failed to load artifact: ${err?.message ?? err}`);
     return;
   }
-  // Map artifact.mode → preview mode + which markdown to load. For 'all',
-  // default to the whitepaper since it's the publish-to-docs target.
+  // Pick markdown + mode. Explicit `target` overrides the auto-detection;
+  // used only for bulk 'all' artifacts.
   let markdown = '';
   let mode = 'synthesize-whitepaper';
-  if (artifact?.mode === 'synthesize-slides') {
+  if (target === 'whitepaper' || target === 'slides' || target === 'email') {
+    markdown = artifact?.artifacts?.[target] ?? '';
+    mode = `synthesize-${target}`;
+  } else if (artifact?.mode === 'synthesize-slides') {
     markdown = artifact.artifacts?.slides ?? '';
     mode = 'synthesize-slides';
   } else if (artifact?.mode === 'synthesize-email') {
