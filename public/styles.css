@@ -60,16 +60,30 @@ body {
     "sidebar topics"
     "sidebar composer-area"
     "sidebar footnote";
-  min-height: 100vh;
+  /* Exact 100vh (not min-height) so the grid is constrained to the viewport.
+     Conversation row scrolls internally (see .conversation overflow rule);
+     the composer + source-chips rows stay at the viewport bottom. Without
+     this, long conversations push composer below the fold. */
+  height: 100vh;
   margin: 0;
   padding: 0;
   gap: 0;
+  overflow: hidden;
 }
 
 .footnote { grid-area: footnote; }
 
 .app-header { grid-area: header; padding: 1.25rem; }
-.conversation { grid-area: conversation; padding: 2.5rem 1.25rem 1.5rem; }
+.conversation {
+  grid-area: conversation;
+  padding: 2.5rem 1.25rem 1.5rem;
+  /* Internal scroll: message history scrolls within its grid row instead of
+     pushing the composer (and source-chips) below the viewport fold.
+     min-height: 0 is required for the 1fr row to actually shrink below its
+     intrinsic content size — without it, grid items default to min-content. */
+  overflow-y: auto;
+  min-height: 0;
+}
 .topic-chips { grid-area: topics; padding: 0.5rem 1.25rem; }
 .composer { grid-area: composer-area; margin: 0 1.25rem 0.75rem; }
 .footnote { grid-column: header; }
