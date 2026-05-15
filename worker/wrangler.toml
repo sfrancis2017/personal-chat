@@ -24,3 +24,13 @@ id = "3acee39af5ef4824b289311f52ad3531"
 # Secrets — set via:
 #   cd worker && npx wrangler secret put ANTHROPIC_API_KEY
 #   cd worker && npx wrangler secret put OPENAI_API_KEY  (Saturday)
+#
+# Optional: 1M-context beta enabler. Set the Anthropic beta header value
+# to allow direct-injection turns with > 175k tokens of pinned source
+# content (cross-book SAP Press synthesis, etc). When unset, worker
+# caps full-injection at 175k and falls back to top-K above that.
+# Pricing: ~2× standard input rate for prompts > 200k.
+#   cd worker && npx wrangler secret put ANTHROPIC_BETA_1M
+# (paste the current beta name from Anthropic docs, e.g.
+#  "context-1m-2025-08-07" — check console.anthropic.com for the
+#  current dated value at time of enabling.)

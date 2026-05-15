@@ -501,6 +501,9 @@ a:hover { text-decoration: underline; }
 .library-source-count {
   font-variant-numeric: tabular-nums;
   color: var(--color-fg-subtle);
+  font-size: 0.7em;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 /* Old read-only "pub" pseudo-badge superseded by the clickable
    .library-source-vis button (owner mode) — kept here for reference but

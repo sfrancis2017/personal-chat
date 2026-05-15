@@ -23,6 +23,12 @@ interface Env {
   // GET /api/artifacts, /api/artifacts/:id. If unbound, artifact endpoints
   // return 503 so the rest of the worker still runs.
   ARTIFACTS_KV?: KVNamespace;
+  // Anthropic beta header value for the 1M-context tier (e.g.,
+  // "context-1m-2025-08-07"). When set, the worker enables 1M-context
+  // requests for High-confidence + direct-injection turns whose estimated
+  // input exceeds 175k tokens. Leave unset to cap at 200k context (current
+  // behavior). Pricing tier: ~2× standard input for prompts > 200k tokens.
+  ANTHROPIC_BETA_1M?: string;
 }
 
 // Constant-time string comparison to avoid timing attacks on token check
@@ -494,6 +500,7 @@ type SystemBlock = { type: 'text'; text: string; cache_control?: { type: 'epheme
 async function callAnthropicWithRetry(
   body: string,
   env: Env,
+  extraHeaders: Record<string, string> = {},
   maxRetries = 3
 ): Promise<Response> {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -503,6 +510,7 @@ async function callAnthropicWithRetry(
         'Content-Type': 'application/json',
         'anthropic-version': '2023-06-01',
         'x-api-key': env.ANTHROPIC_API_KEY,
+        ...extraHeaders,
       },
       body,
     });
@@ -601,7 +609,7 @@ async function streamFromAnthropic(
   mode: ChatRequest['mode'],
   authMode: AuthMode,
   env: Env,
-  opts: { confidenceMode?: boolean } = {}
+  opts: { confidenceMode?: boolean; use1MContext?: boolean } = {}
 ): Promise<Response> {
   // Build the system prompt as cacheable blocks. Anthropic's prompt caching
   // (ephemeral, 5-minute TTL) gives ~90% discount on cached input tokens.
@@ -669,7 +677,15 @@ async function streamFromAnthropic(
     stream: true,
   });
 
-  const upstream = await callAnthropicWithRetry(requestBody, env);
+  // Add the 1M-context beta header when needed for direct-injection requests
+  // whose total content estimate exceeds the standard 200k context window.
+  // Server-side decision: client opts in via inject_full_estimate, worker
+  // applies the beta header only when env.ANTHROPIC_BETA_1M is configured.
+  const extraHeaders: Record<string, string> = {};
+  if (opts.use1MContext && env.ANTHROPIC_BETA_1M) {
+    extraHeaders['anthropic-beta'] = env.ANTHROPIC_BETA_1M;
+  }
+  const upstream = await callAnthropicWithRetry(requestBody, env, extraHeaders);
 
   if (!upstream.ok || !upstream.body) {
     const errText = await upstream.text();
@@ -1344,27 +1360,40 @@ export default {
       // path to anonymous visitors.
       const confidenceMode = !!body.confidence_mode && authMode === 'owner';
 
-      // Direct-injection decision: when High-confidence mode is on AND sources
-      // are pinned AND the client signals inject_full (it ran the budget check
-      // using cached library data), bypass retrieval and send ALL chunks from
-      // those sources to Claude. Worker also re-applies an upper-bound budget
-      // check to defend against a misconfigured client. ~150k token cap leaves
-      // ~50k headroom for chat history + system prompt + response budget.
-      const MAX_INJECT_BUDGET_TOKENS = 150_000;
+      // Direct-injection decision with two budget tiers:
+      //   - Standard tier (≤175k tokens): always allowed when client opts in.
+      //     200k context − ~15-25k for system prompt + chat history +
+      //     response budget leaves ~175k usable for pinned source content.
+      //   - 1M tier (175k–800k tokens): only allowed when env.ANTHROPIC_BETA_1M
+      //     is set (Anthropic API account must support the long-context beta).
+      //     Prompts over 200k get billed at ~2× standard input rate.
+      //   - Beyond 800k: never inject; fall back to top-K=15 within source filter.
+      const STANDARD_TIER_TOKENS = 175_000;
+      const LONG_CONTEXT_TIER_TOKENS = 800_000;
+      const has1MTierAvailable = !!env.ANTHROPIC_BETA_1M;
       const reqInjectFull =
         !!body.inject_full &&
         confidenceMode &&
         Array.isArray(body.source_paths) &&
         body.source_paths.length > 0;
-      // Worker can't know exact token count without fetching all chunks first,
-      // so we trust the client's pre-check. If droplet returns more than the
-      // safe ceiling, we'd hit a downstream Anthropic 400 — the client should
-      // be conservative on its estimate. ~1000 tokens per chunk is the typical
-      // upper bound from ingest_core (CHUNK_TOKENS=1000).
       const clientEstimate = typeof body.inject_full_estimate === 'number'
         ? body.inject_full_estimate
         : 0;
-      const injectFull = reqInjectFull && clientEstimate <= MAX_INJECT_BUDGET_TOKENS;
+
+      let injectFull = false;
+      let use1MContext = false;
+      if (reqInjectFull) {
+        if (clientEstimate <= STANDARD_TIER_TOKENS) {
+          injectFull = true;
+        } else if (
+          clientEstimate <= LONG_CONTEXT_TIER_TOKENS &&
+          has1MTierAvailable
+        ) {
+          injectFull = true;
+          use1MContext = true;
+        }
+        // else: injectFull stays false → falls back to top-K within source filter
+      }
 
       // Skip RAG retrieval when synthesizing — the chat is the source of truth.
       let chunks: Chunk[] = [];
@@ -1390,7 +1419,7 @@ export default {
         body.mode,
         authMode,
         env,
-        { confidenceMode }
+        { confidenceMode, use1MContext }
       );
       // Merge CORS into the streaming response
       const headers = new Headers(streamResp.headers);

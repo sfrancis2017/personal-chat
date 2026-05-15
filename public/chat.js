@@ -375,13 +375,17 @@ function renderLibrary() {
                    title="Currently ${visState} — click to flip"
                    aria-label="Toggle visibility (currently ${visState})">${visState}</button>`
         : '';
+      // Per-source token estimate so you can see each source's budget weight
+      // before pinning (useful when stacking 2-3 SAP Press books to know
+      // whether you'll fit in standard tier vs needing 1M-context tier).
+      const tokK = Math.round((s.chunks ?? 0) * TOKENS_PER_CHUNK_ESTIMATE / 1000);
       row.innerHTML = `
         <input type="checkbox" class="library-source-checkbox"
                data-source-path="${escapeHtml(s.source_path)}"
                ${isSelected ? 'checked' : ''} />
         <span class="library-source-title">${escapeHtml(s.title || s.source_path)}</span>
         ${visChip}
-        <span class="library-source-count">${s.chunks}</span>
+        <span class="library-source-count" title="${s.chunks} chunks ≈ ${tokK}k tokens">${s.chunks} · ~${tokK}k</span>
       `;
       const cb = row.querySelector('.library-source-checkbox');
       cb.addEventListener('change', () => {
@@ -448,7 +452,14 @@ function renderLibrarySelectionSummary() {
 // Approx upper-bound tokens per chunk (ingest_core uses CHUNK_TOKENS=1000).
 // Used for the budget estimate when deciding direct-injection vs retrieval.
 const TOKENS_PER_CHUNK_ESTIMATE = 1000;
-const INJECTION_BUDGET_TOKENS = 150_000;
+// Two-tier injection budget (mirrored on the worker):
+//   - Standard tier (≤175k): always allowed in Sonnet's 200k window
+//   - 1M-context tier (175k–800k): requires ANTHROPIC_BETA_1M set on worker;
+//     ~2× input pricing past 200k. Useful for cross-book SAP-style synthesis.
+//   - Beyond 800k: top-K=15 fallback within the pinned-source filter
+const STANDARD_TIER_TOKENS = 175_000;
+const LONG_CONTEXT_TIER_TOKENS = 800_000;
+const INJECTION_BUDGET_TOKENS = LONG_CONTEXT_TIER_TOKENS;  // legacy alias used elsewhere
 
 // Sum estimated tokens across all currently pinned sources, looked up from
 // libraryData (each source has a `chunks` count from the /library endpoint).
@@ -506,23 +517,35 @@ function renderSourceChips() {
     sourceChipsRow.appendChild(chip);
   }
 
-  // Append a small status badge: shows token estimate + which mode will run
-  // (full injection vs retrieval-within-filter) for the next chat turn.
+  // Tier-aware status badge. Shows estimated tokens + which path the next
+  // chat turn will take, with a rough cost callout for the 1M tier so the
+  // user sees the price implication before sending.
   const est = estimatePinnedTokens();
+  const estK = Math.round(est / 1000);
   const confidence = !!confidenceToggle?.checked;
   const status = document.createElement('span');
   status.className = 'source-chip-status';
   if (!confidence) {
-    status.textContent = `${Math.round(est / 1000)}k tokens — retrieval (top-K) within scope`;
+    status.textContent = `${estK}k tokens — retrieval (top-K) within scope`;
     status.title = 'Turn on High-confidence mode for full-content injection when budget fits';
-  } else if (est <= INJECTION_BUDGET_TOKENS) {
-    status.textContent = `${Math.round(est / 1000)}k / 150k tokens — full injection ✓`;
+  } else if (est <= STANDARD_TIER_TOKENS) {
+    status.textContent = `${estK}k / 175k tokens — full injection ✓`;
     status.classList.add('source-chip-status-inject');
-    status.title = 'Claude will see ALL chunks from the pinned sources';
+    status.title = 'Claude will see ALL chunks from the pinned sources (standard context tier)';
+  } else if (est <= LONG_CONTEXT_TIER_TOKENS) {
+    // Rough cost estimate: input × $6/M (1M tier rate) + output × $22.50/M
+    // (~4k output). Display in dollars to 2 decimal places.
+    const estCost = ((est * 6) / 1_000_000) + ((4_000 * 22.5) / 1_000_000);
+    status.textContent = `${estK}k tokens — 1M-context tier (≈$${estCost.toFixed(2)}/turn)`;
+    status.classList.add('source-chip-status-inject');
+    status.title =
+      'Exceeds standard 200k context — uses Anthropic 1M-context beta. ' +
+      'Requires ANTHROPIC_BETA_1M env var set on worker; falls back to top-K if unavailable. ' +
+      '~2× standard input pricing applies.';
   } else {
-    status.textContent = `${Math.round(est / 1000)}k tokens — exceeds 150k budget, top-K fallback`;
+    status.textContent = `${estK}k tokens — exceeds 1M budget, top-K fallback`;
     status.classList.add('source-chip-status-fallback');
-    status.title = 'Too much pinned content for full injection — falls back to top-K=15 within scope';
+    status.title = 'Too much pinned content even for the 1M tier — falls back to top-K=15 within scope';
   }
   sourceChipsRow.appendChild(status);
 }
