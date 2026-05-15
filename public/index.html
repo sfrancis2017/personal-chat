@@ -139,6 +139,12 @@
         <summary class="sidebar-prompts-summary">Quick prompts</summary>
         <div class="sidebar-prompts-list" id="sidebar-prompts-list"></div>
       </details>
+      <div class="sidebar-confidence" id="sidebar-confidence" hidden>
+        <label class="confidence-toggle sidebar-confidence-toggle" title="Wider retrieval (top-K=15) + full-content injection when source-pin budget allows, citation-strict prompt, plus a verification checklist at the end. Use for work-grade output. Requires at least one source pinned from Library.">
+          <input type="checkbox" id="confidence-toggle" />
+          <span class="confidence-label-text">High-confidence mode</span>
+        </label>
+      </div>
       <details class="sidebar-artifacts" id="sidebar-artifacts" hidden>
         <summary class="sidebar-artifacts-summary">
           <span>Saved artifacts</span>
@@ -191,10 +197,6 @@
     <div class="source-chips" id="source-chips" hidden aria-label="Pinned source documents">
       <span class="source-chips-label">Sources</span>
       <div class="source-chips-row" id="source-chips-row" role="group"></div>
-      <label class="confidence-toggle source-chips-confidence" title="Wider retrieval (top-K=15) + full-content injection when budget allows, citation-strict prompt, plus a verification checklist at the end. Use for work-grade output.">
-        <input type="checkbox" id="confidence-toggle" />
-        <span class="confidence-label-text">High-confidence</span>
-      </label>
     </div>
 
     <form class="composer" id="composer" autocomplete="off">

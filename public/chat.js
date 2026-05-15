@@ -99,8 +99,11 @@ function refreshAuthGatedUI() {
   // Saved Artifacts panel — owner-only (work-tool's read source)
   if (sidebarArtifactsEl) sidebarArtifactsEl.hidden = !owner;
   if (owner) loadArtifacts();
-  // Re-render source-chips row — owner mode now keeps it visible even when
-  // empty (placeholder + High-confidence toggle), public mode hides it.
+  // High-confidence toggle in sidebar — owner-only (server enforces too).
+  const sidebarConfidenceEl = document.getElementById('sidebar-confidence');
+  if (sidebarConfidenceEl) sidebarConfidenceEl.hidden = !owner;
+  // Re-render source-chips row — owner mode keeps it visible when sources
+  // are pinned (with token-budget badge), public mode hides it.
   renderSourceChips();
   // Sidebar history is local to the device. Hide for public visitors —
   // less chrome on a clean read-only chat surface.
@@ -472,27 +475,17 @@ function renderSourceChips() {
   sourceChipsRow.replaceChildren();
   const owner = isOwnerMode();
 
-  // Non-owners: always hide the row entirely, even if selectedSources has
-  // stale entries from a previous owner-mode session. Owner-only feature;
-  // public mode shouldn't see any source-pinning UI.
-  if (!owner) {
+  // Non-owners or no-sources-pinned: hide the row entirely. The High-
+  // confidence toggle now lives in the sidebar (always visible to owners),
+  // so the source-chips row's only job is to show chips + token-budget
+  // badge when sources are actually pinned.
+  if (!owner || selectedSources.size === 0) {
     sourceChips.hidden = true;
-    if (confidenceToggle) confidenceToggle.checked = false;
+    if (!owner && confidenceToggle) confidenceToggle.checked = false;
     return;
   }
 
-  // Owner mode below — row stays visible so the High-confidence toggle is
-  // always discoverable.
   sourceChips.hidden = false;
-  if (selectedSources.size === 0) {
-    // Empty state: placeholder hint. Toggle state preserved (don't auto-clear)
-    // so users can "arm" confidence mode before pinning sources.
-    const placeholder = document.createElement('span');
-    placeholder.className = 'source-chips-empty';
-    placeholder.textContent = 'No sources pinned — pin from Library for grounded retrieval';
-    sourceChipsRow.appendChild(placeholder);
-    return;
-  }
   for (const [path, meta] of selectedSources) {
     const chip = document.createElement('button');
     chip.type = 'button';

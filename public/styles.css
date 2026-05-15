@@ -921,26 +921,36 @@ a:hover { text-decoration: underline; }
   height: 16px;
   accent-color: var(--color-accent, #1565c0);
 }
-.source-chips-confidence {
-  margin-left: auto;
-  padding: 0.35rem 0.65rem;
+/* Sidebar placement for the High-confidence toggle. Lives above the
+   Saved artifacts panel — always visible in owner mode without scrolling.
+   Replaces the easy-to-miss inline placement in the source-chips row. */
+.sidebar-confidence {
+  padding: 0.6rem 0.875rem;
+  border-top: 1px solid var(--color-border);
+}
+.sidebar-confidence[hidden] { display: none; }
+.sidebar-confidence-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.5rem 0.65rem;
   border-radius: var(--radius-md);
   background: var(--color-bg);
   border: 1.5px solid var(--color-accent, #1565c0);
   color: var(--color-accent, #1565c0);
   transition: background 120ms ease, color 120ms ease;
 }
-.source-chips-confidence:hover {
+.sidebar-confidence-toggle:hover {
   background: var(--color-accent, #1565c0);
   color: white;
 }
 /* When the toggle is checked, the whole label "lights up" so the active
    state is obvious at a glance. */
-.source-chips-confidence:has(input:checked) {
+.sidebar-confidence-toggle:has(input:checked) {
   background: var(--color-accent, #1565c0);
   color: white;
 }
-.source-chips-confidence:has(input:checked) .confidence-label-text {
+.sidebar-confidence-toggle:has(input:checked) .confidence-label-text {
   font-weight: 600;
 }
 
