@@ -474,6 +474,17 @@ Mermaid rules:
   - Use <br> for line breaks inside node labels, never \\n
   - Node labels short (3-5 words max)
   - Match what's in prose + grounding. Don't invent components.
+  - QUOTE ANY LABEL CONTAINING SPECIAL CHARACTERS. If a node label
+    contains \`/\`, \`:\`, \`.\`, \`(\`, \`)\`, \`<\`, \`>\`, \`#\`, or starts with
+    a non-alphanumeric character, wrap it in double quotes. Examples:
+    BAD:  A[/admin/write]              ← \`[/.../]\` is parallelogram syntax
+    GOOD: A["/admin/write"]
+    BAD:  C[GitHub: src/content/blog/]  ← unquoted \`:\` may break parsing
+    GOOD: C["GitHub: src/content/blog/"]
+    BAD:  participant Editor as /admin/write   ← sequence diagram alias
+    GOOD: participant Editor as "/admin/write"
+    Mermaid silently fails to render diagrams with these patterns;
+    the raw text shows on the live site. Flag as [BUILD-BLOCKING].
 
 ## 5. POLISH
 Typos, punctuation, inconsistent capitalisation, clichés.
