@@ -11,6 +11,12 @@ ANTHROPIC_MODEL = "claude-sonnet-4-6"
 #   curl -s https://api.github.com/repos/sfrancis2017/docs | grep '"default_branch"'
 # Worker defaults to "main" if unset; this repo uses "master" (older convention).
 DOCS_BRANCH = "master"
+# Pre-registered GitHub repos available as grounding sources in the
+# /admin/write editor's draft review pipeline. Comma-separated
+# "owner/repo" slugs. The editor renders these as a dropdown; the worker
+# fetches their READMEs, configs, and core source files via the GitHub
+# Contents API on review. Add or remove repos here as the build evolves.
+GROUNDING_REPOS = "sfrancis2017/sajivfrancis.github.io-master,sfrancis2017/personal-chat,sfrancis2017/docs,sfrancis2017/ea-explorer-worker"
 
 [[kv_namespaces]]
 binding = "RATE_LIMIT_KV"
@@ -24,6 +30,26 @@ id = "df9b1650caba472d8df576b25b893212"
 [[kv_namespaces]]
 binding = "ARTIFACTS_KV"
 id = "3acee39af5ef4824b289311f52ad3531"
+
+# Drafts store — persists blog post drafts authored in the /admin/write
+# editor on sajivfrancis.com. Owner-only. Each draft is a JSON record
+# with frontmatter + markdown body. Read/write via /api/drafts/* endpoints.
+# Create the namespace before first deploy:
+#   npx wrangler kv:namespace create DRAFTS_KV
+# Then replace the placeholder id below with the value wrangler prints.
+[[kv_namespaces]]
+binding = "DRAFTS_KV"
+id = "REPLACE_WITH_DRAFTS_KV_ID"
+
+# Repo grounding cache — caches GitHub-fetched repo contents used as
+# grounding context for /api/drafts/:id/review. Keyed by `{repo}:{sha}`
+# with a 1-hour TTL. Cache miss falls through to a live fetch.
+# Create the namespace before first deploy:
+#   npx wrangler kv:namespace create REPO_CACHE_KV
+# Then replace the placeholder id below with the value wrangler prints.
+[[kv_namespaces]]
+binding = "REPO_CACHE_KV"
+id = "REPLACE_WITH_REPO_CACHE_KV_ID"
 
 # Secrets — set via:
 #   cd worker && npx wrangler secret put ANTHROPIC_API_KEY

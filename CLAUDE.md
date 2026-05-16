@@ -88,6 +88,100 @@ Postgres 16 + pgvector (same droplet, port 5432 local)
 | F5 | Extended thinking opt-in toggle | ~30 min | Visible reasoning for arch questions |
 | —  | Domain diagram models (ArchiMate, BPMN, C4) | TBD | Pure prompt-engineering or post-process |
 | —  | Site embed: floating launcher on sajivfrancis.com → iframe to chat | ~1 hr | See "Cross-repo" below |
+| —  | docs.sajivfrancis.com: expand/zoom-on-click for rendered Mermaid diagrams (parity with chat-side diagram modal) | ~1 hr | Architecture diagrams are dense; readers need a full-screen view. Mermaid client-side render landed 2026-05-15; modal not yet ported. Lives in `sfrancis2017/docs` astro.config.mjs head script. |
+| —  | Whitepaper "no-link" policy — synthesis prompt rule + post-process strip | ~45 min | Reference material is multi-year old; SAP URLs like `rapid.sap.com/bp/...` rot fast. Replace with durable identifiers (scope item codes, transaction codes, IMG paths, SAP Note numbers). (1) Add "do not include URLs in body" rule to whitepaper system prompt. (2) Add `stripBodyLinks(md)` post-process in worker's publish pipeline that converts `[text](url)` → `text` and drops bare URLs. Apply on docs publish only, not chat preview. Real example surfaced 2026-05-15 from CFIN: "available at https://rapid.sap.com/bp/#/browse/scopeitems/1W4" — keep "scope item 1W4", drop the URL. |
+
+## Next session — handoff from May 12, 2026
+
+Three workstreams parked, in priority order.
+
+### 1. Wire up the SEC benchmark feature (backend already drafted)
+
+**Status as of handoff:**
+- Migration `scripts/migrations/002_benchmark.sql` applied to `chat_db` on droplet ✅
+  (benchmark_jobs table + sec_competitor_chunks view + expire_sec_competitor_cache() function;
+  grants mirror the chunks table pattern: chat_user=arwd/postgres)
+- `scripts/benchmark_job.py` orchestrator drafted (539 LOC) — passes syntax check, NOT deployed
+- `scripts/retrieve.py` extended with 3 new routes (+189 LOC) — passes syntax check, NOT deployed
+- Locked design decisions: progress card in chat thread, MAX_CONCURRENT_JOBS=2, owner-only
+
+**Still to ship:**
+
+| Layer | Work | ~LOC |
+|---|---|---|
+| Droplet env | Add `ANTHROPIC_API_KEY` and confirm `SEC_USER_AGENT` in `/opt/retrieve/retrieve.env` | — |
+| Droplet deploy | `scp scripts/benchmark_job.py scripts/retrieve.py root@droplet:/opt/retrieve/ && systemctl restart retrieve` | — |
+| Droplet smoke test | `python3 -m benchmark_job <pdf>`, then curl `/benchmark/start` + status + report endpoints | — |
+| Worker | 3 passthrough routes in `worker/src/index.ts`: `POST /benchmark/start`, `GET /benchmark/status/:id`, `GET /benchmark/report/:id` — same pattern as existing `/benchmark/peers` | ~120 |
+| Frontend HTML | Mode radio in upload modal: "Add to corpus" (default) vs "Benchmark this filing" | ~10 |
+| Frontend JS | Branch in `submitUpload` for benchmark mode, new `submitBenchmark` + `pollBenchmarkStatus`, chat-thread progress card, reuse the existing preview modal for report display | ~80 |
+
+**Caveat to plan for (v2 cleanup):** daemon thread dies on `systemctl restart`. In-flight jobs at restart time stay in non-terminal status forever. Nightly cron should sweep:
+
+```sql
+UPDATE benchmark_jobs SET status='failed', error_message='service restart — job abandoned'
+WHERE status = ANY(ARRAY['pending','identifying','fetching_peers','extracting','reporting'])
+  AND created_at < NOW() - INTERVAL '30 minutes';
+```
+
+### 2. Whitepaper rendering upgrade — one template, two callers
+
+Benchmark report and existing `synthesize-whitepaper` export share a target format. Single rendering pipeline upgrade serves both.
+
+| Element | Wanted | Notes |
+|---|---|---|
+| Title page banner | Use `og-default.svg` from main site as starting point; higher-fidelity local asset can replace if available | If banner SVG uses webfonts (Inter etc.), PDF pipeline may not render them. Test early; fallback may be PNG rasterization |
+| Title page metadata (benchmark) | Auto-populated from `benchmark_jobs` row: company name, period, peers, ticker | Structured data, no manual editing needed |
+| Title page metadata (general synthesis) | Pre-render pass: hand chat transcript to Claude, get `{title, subtitle, summary, date}` as JSON, pre-fill preview | Existing markdown preview stays editable — user accepts or tweaks before PDF gen. The change is first-draft quality, not the affordance |
+| Table of contents | Standalone page, H1 + H2 + H3 depth, clickable anchors. HTML preview AND PDF (PDFs support internal links) | Numbered headings improve scannability for the depth requested |
+| Section back-links | "↑ Back to contents" link below each H1/H2 in rendered output | |
+| Mermaid sizing | Fit-to-window by default in chat AND PDF; expand modal already exists | Fix: strip `width`/`height` SVG attrs after Mermaid renders, let CSS govern. Two-line fix in the renderer post-process step |
+
+### 3. NEW: "Publish analysis to docs.sajivfrancis.com"
+
+Pattern Sajiv hit repeatedly: deep chat analysis on a topic → multiple grounding rounds → synthesized whitepaper → wants to persist as a docs page, not a blog post. Distinct from voice/editorial writing.
+
+**Loop closure:** docs.sajivfrancis.com is already ingested into chat (`docs` topic, ~160 chunks). Published analyses become future chat-grounding material on the next docs re-index. Chat → docs → chat.
+
+**Architecture sketch:**
+
+```
+Preview modal "Publish to docs" button
+  → small form: title (pre-filled), slug (auto), section (dropdown), summary (Claude-filled)
+  → POST /publish-to-docs on worker
+  → worker uses GitHub API with DOCS_GITHUB_TOKEN secret
+  → commits markdown to sfrancis2017/docs at src/content/docs/<section>/<slug>.md
+  → Starlight CI redeploys
+```
+
+**Frontmatter convention:**
+
+```yaml
+---
+title: ...
+description: ...
+chat-published: true
+published-at: 2026-05-12
+chat-corpus-snapshot: <date-or-sha>
+---
+```
+
+**Open decisions for next session:**
+
+| Decision | Lean |
+|---|---|
+| PR vs direct commit | Direct commit (preview modal is the review gate) |
+| Section placement | Dedicated `/analysis/` keeps chat-derived content separate from canonical docs |
+| GitHub auth | Fine-grained PAT scoped to docs repo, stored as Worker secret `DOCS_GITHUB_TOKEN` |
+| Re-ingestion trigger | Leave on existing schedule — don't add orchestration complexity for immediate availability |
+| Provenance | Recorded in frontmatter only, not surfaced in rendered UI |
+
+### Loose ends from tonight's droplet diagnostic (lower priority)
+
+1. **`/root/ingest/ingest_core.py` has a stale hard-delete**, `/opt/retrieve/ingest_core.py` has the correct soft-delete (canonical, matches `personal-chat/scripts/ingest_core.py`). Active correctness bug for Nextcloud re-ingests. Fix: `cp /opt/retrieve/ingest_core.py /root/ingest/ingest_core.py` on droplet. Then decide if `/root/ingest/` stays as a staging area or gets collapsed.
+2. **`/opt/retrieve/` is the live install** (systemd `WorkingDirectory`, runs as root). `/root/ingest/` is a sandbox where Nextcloud-specific scripts live (`nextcloud_ingest.py` is only there, log file proves it's actively running). Never sync `/root/ingest/` → `/opt/retrieve/` — that direction would clobber production with stale code (hybrid retrieval, library endpoint, public-mode filtering, soft-delete all live only in `/opt/retrieve/retrieve.py`).
+3. **`/opt/retrieve/` has no git backing** — one `rm` from being unrecoverable. `personal-chat/scripts/` is the canonical Mac-side source. Long-term: explicit deploy script that rsyncs `personal-chat/scripts/` → droplet `/opt/retrieve/` and `systemctl restart retrieve`. Add to a `scripts/deploy.sh` next time the cleanup-tax feels worth paying.
+4. **`DATABASE_URL` lives in `/opt/retrieve/retrieve.env`** (not `/root/ingest/retrieve.env`). Sourcing that file enables `psql "$DATABASE_URL" -f migrations/NNN.sql` for future migrations — sidesteps the `sudo -u postgres` workaround.
 
 ## Cross-repo: chat embed on main site
 Main site repo is in `~/Documents/sajivfrancis.github.io-master/` (Jekyll → Astro

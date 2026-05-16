@@ -23,6 +23,25 @@ interface Env {
   // GET /api/artifacts, /api/artifacts/:id. If unbound, artifact endpoints
   // return 503 so the rest of the worker still runs.
   ARTIFACTS_KV?: KVNamespace;
+  // Optional KV binding for blog post drafts authored in the /admin/write
+  // editor on sajivfrancis.com. Owner-only. Each draft is a JSON blob with
+  // frontmatter + markdown body. If unbound, /api/drafts endpoints return 503.
+  DRAFTS_KV?: KVNamespace;
+  // Optional KV binding for caching fetched GitHub repo content used as
+  // grounding context for draft reviews. Keyed by `{repo}:{branch}:{sha}`
+  // with a 1-hour TTL. Cache miss falls through to a live fetch.
+  REPO_CACHE_KV?: KVNamespace;
+  // Comma-separated list of `owner/repo` slugs available for grounding in
+  // the draft review pipeline. Pre-registered so the editor UI can render a
+  // dropdown rather than asking for free-form URLs. Defaults to the four
+  // active sfrancis2017 repos if unset.
+  GROUNDING_REPOS?: string;
+  // Target repo/branch for the /admin/write editor's "publish" action.
+  // Drafts land as .mdx files under src/content/blog/ on this repo.
+  // DOCS_GITHUB_TOKEN must have contents:write on this repo too.
+  BLOG_REPO?: string;          // default: "sfrancis2017/sajivfrancis.github.io-master"
+  BLOG_BRANCH?: string;        // default: "master"
+  BLOG_CONTENT_ROOT?: string;  // default: "src/content/blog"
   // Anthropic beta header value for the 1M-context tier (e.g.,
   // "context-1m-2025-08-07"). When set, the worker enables 1M-context
   // requests for High-confidence + direct-injection turns whose estimated
@@ -81,6 +100,115 @@ async function clientHash(req: Request, env: Env, mode: AuthMode): Promise<strin
   const buf = await crypto.subtle.digest('SHA-256', data);
   const arr = Array.from(new Uint8Array(buf));
   return arr.map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
+}
+
+// ---- Draft validation helpers --------------------------------------------
+//
+// Used by /api/drafts POST + PUT to validate and normalise blog post
+// drafts authored in the /admin/write editor. Drafts have a frontmatter
+// object (Astro content collection schema) + markdown body. The
+// grounding_repos array is optional — pins GitHub repos to fetch as
+// review-time grounding context.
+
+const ALLOWED_PUBLISH_MODES = ['blog-first', 'venue-first'] as const;
+
+type DraftFrontmatter = {
+  title: string;
+  subtitle?: string;
+  description: string;
+  pubDate: string; // ISO date (YYYY-MM-DD)
+  tags: string[];
+  draft: boolean;
+  publishMode: 'blog-first' | 'venue-first';
+  slug?: string;
+};
+
+type DraftValidationResult =
+  | { ok: true; frontmatter: DraftFrontmatter; body: string; grounding_repos: string[] }
+  | { ok: false; error: string };
+
+function validateDraftPayload(input: any): DraftValidationResult {
+  if (!input || typeof input !== 'object') {
+    return { ok: false, error: 'request body must be a JSON object' };
+  }
+  const fm = input.frontmatter;
+  if (!fm || typeof fm !== 'object') {
+    return { ok: false, error: 'frontmatter (object) required' };
+  }
+  if (typeof fm.title !== 'string' || fm.title.trim().length === 0) {
+    return { ok: false, error: 'frontmatter.title (non-empty string) required' };
+  }
+  if (fm.title.length > 300) {
+    return { ok: false, error: 'frontmatter.title must be 300 characters or less' };
+  }
+  if (typeof fm.description !== 'string' || fm.description.trim().length === 0) {
+    return { ok: false, error: 'frontmatter.description (non-empty string) required' };
+  }
+  if (typeof fm.pubDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(fm.pubDate)) {
+    return { ok: false, error: 'frontmatter.pubDate must be an ISO date (YYYY-MM-DD)' };
+  }
+  const tags = Array.isArray(fm.tags) ? fm.tags : [];
+  if (tags.length > 20 || tags.some((t: any) => typeof t !== 'string')) {
+    return { ok: false, error: 'frontmatter.tags must be an array of up to 20 strings' };
+  }
+  const publishMode = fm.publishMode ?? 'blog-first';
+  if (!ALLOWED_PUBLISH_MODES.includes(publishMode)) {
+    return {
+      ok: false,
+      error: `frontmatter.publishMode must be one of: ${ALLOWED_PUBLISH_MODES.join(', ')}`,
+    };
+  }
+  if (typeof input.body !== 'string') {
+    return { ok: false, error: 'body (string) required' };
+  }
+  if (input.body.length > 500_000) {
+    return { ok: false, error: 'body must be 500,000 characters or less' };
+  }
+  const grounding_repos = Array.isArray(input.grounding_repos) ? input.grounding_repos : [];
+  if (
+    grounding_repos.length > 3 ||
+    grounding_repos.some((r: any) => typeof r !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(r))
+  ) {
+    return {
+      ok: false,
+      error: 'grounding_repos must be an array of up to 3 "owner/repo" strings',
+    };
+  }
+  if (fm.slug !== undefined && (typeof fm.slug !== 'string' || !/^[a-z0-9][-a-z0-9]{0,79}$/.test(fm.slug))) {
+    return {
+      ok: false,
+      error: 'frontmatter.slug must be a URL-safe slug (lowercase, hyphens, max 80 chars)',
+    };
+  }
+  return {
+    ok: true,
+    frontmatter: {
+      title: fm.title.trim(),
+      subtitle: typeof fm.subtitle === 'string' ? fm.subtitle.trim().slice(0, 300) : undefined,
+      description: fm.description.trim(),
+      pubDate: fm.pubDate,
+      tags: tags.map((t: string) => t.trim()).filter(Boolean),
+      draft: fm.draft === true,
+      publishMode,
+      slug: fm.slug,
+    },
+    body: input.body,
+    grounding_repos,
+  };
+}
+
+// Slugify a title into a URL-safe identifier. Mirrors the regex enforced
+// in validateDraftPayload so the output is always valid for the slug field.
+function slugify(title: string): string {
+  return (
+    title
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[̀-ͯ]/g, '') // strip diacritics
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 80) || 'untitled'
+  );
 }
 
 // ---- Rate limit (public mode only) ---------------------------------------
@@ -284,6 +412,108 @@ Cite source chunks for every factual claim. Don't be agreeable for its own sake.
   'supporting-review': `Mode: Supporting Review. Build the case for the user's stated direction. Surface the strongest evidence in the retrieved chunks that supports it. Frame as: thesis → supporting evidence → counter-arguments and why they don't outweigh → why this is the right call. Use this for stakeholder buy-in or board justification.`,
   'adversarial-review': `Mode: Adversarial Review. Argue against the user's framing. Surface what the retrieved context contradicts in their stated view, name failure modes they haven't acknowledged, and challenge their assumptions. Frame as: stated position → strongest objections → evidence from chunks that undermines it → what would have to be true for the user to be right. Be direct, not hostile.`,
 };
+
+// System prompt for /api/drafts/:id/review — editorial pass for blog
+// drafts authored in /admin/write. Returns structured JSON suggestions.
+// Combines a voice-preserving editorial pass with technical grounding
+// against GitHub repos (TECHNICAL_GROUNDING) and visual augmentation
+// of described systems (TECHNICAL_AUGMENTATION).
+const DRAFT_REVIEW_SYSTEM_PROMPT = `You are an editorial reviewer for Sajiv Francis — an Enterprise Architect who writes about AI, cloud, SAP, and enterprise architecture. He is your only client. You know his work and his voice.
+
+# Your mission
+
+Read his draft. Suggest targeted improvements that PRESERVE his voice and his ideas. You are an editor, not a co-author. Every suggestion must make the writing sharper without making it sound like someone else wrote it.
+
+You operate in two registers at once:
+
+1. PROSE EDITOR — flow, clarity, sentence-level polish
+2. TECHNICAL REVIEWER — when he describes systems, components, processes, or architectures, both (a) GROUND loose technical claims against the GitHub repo grounding provided, and (b) AUGMENT prose-only descriptions with visual structures (Mermaid diagrams, component tables, labeled lists).
+
+# Voice you must preserve
+
+Sajiv writes like an engineer who has shipped real systems and is genuinely curious. Specifically:
+
+- British/Commonwealth spellings ("organisation", "programmes")
+- Em-dashes — he uses them often, on purpose
+- Direct, declarative sentences. Subject-verb-object.
+- Occasional dry asides. Light, never sarcastic.
+- First person. "I built", "I shipped", "what I got wrong".
+- Specific numbers and names over abstractions ("47 custom ABAP objects" not "many custom objects")
+- Mentions of his work at "a Fortune 50 technology company" — NEVER name the employer directly. If you see "Intel" or any named employer, that is a CRITICAL_CONFIDENTIAL finding.
+- Does NOT use: "excited to share", "thrilled to announce", "in this post I will explore", "leverage", "synergy", "unlock", "empower", "game-changer".
+
+Preserve all of the above EXACTLY.
+
+# Categories
+
+Every suggestion must specify one category:
+
+## 1. FLOW
+Sentence-level edits where prose stumbles. Suggest a minimal rewrite that sounds like him.
+
+## 2. STRUCTURE
+Paragraph- or section-level issues. Repetition, missing transitions, missing headings, conclusion that restates without resolving.
+
+## 3. TECHNICAL_GROUNDING
+When the draft references a real build for which you have grounding context (see the <grounding> block), correct prose that contradicts the actual implementation. Examples: "I used Python" when wrangler.toml says TypeScript; "I used MCP" when worker/index.ts is a REST polling loop; "we used Redis for state" when the stack is Cloudflare KV.
+
+Grounding rules:
+  - ONLY make corrections backed by the <grounding> block. Never correct based on general knowledge of "how things are usually built".
+  - If the prose contradicts grounding, grounding wins — but preserve the author's framing, swap only the technical specifics.
+  - If the draft mentions a system NOT in the grounding block, leave it alone.
+
+## 4. TECHNICAL_AUGMENTATION
+When the draft describes systems/processes in prose, propose a visual augmentation that mirrors what's already in the text + grounding:
+
+  - mermaid_diagram (preferred): a flowchart/sequence/state diagram capturing flow already described
+  - component_table: a 2-3 column table when he lists similar items with attributes
+  - labeled_list: bolded-lead bullets when he describes a sequence in prose
+
+Mermaid rules:
+  - Diagram type on line 1 ("flowchart TD", not "graph TD")
+  - Use <br> for line breaks inside node labels, never \\n
+  - Node labels short (3-5 words max)
+  - Match what's in prose + grounding. Don't invent components.
+
+## 5. POLISH
+Typos, punctuation, inconsistent capitalisation, clichés. Low-stakes.
+
+## 6. CRITICAL_CONFIDENTIAL
+Flag-only category (no fix suggested). Use when the draft contains:
+  - Named employer (Intel, etc.) outside the "Fortune 50 technology company" phrasing
+  - Internal project/system/team names that look confidential
+  - Anything that should not be public
+
+# Hard rules — NEVER
+
+- Never rewrite a paragraph wholesale. Suggest the SMALLEST change that fixes the issue.
+- Never add new ideas, arguments, or examples. You can AUGMENT (visualise what's described) and GROUND (correct against the grounding block), but you cannot extend the author's thinking.
+- Never suggest filler ("a stronger introduction would help" without specifics).
+- Never use hedge words in your rationale ("perhaps consider", "you might want to"). State directly.
+- Never suggest changes that match a Generic Blog Post Template.
+
+# Output format
+
+Return ONLY valid JSON matching this schema. No preamble, no markdown fences, no commentary.
+
+{
+  "overall": "1-2 sentence summary of the draft's current state",
+  "suggestions": [
+    {
+      "id": "s1",
+      "category": "FLOW" | "STRUCTURE" | "TECHNICAL_GROUNDING" | "TECHNICAL_AUGMENTATION" | "POLISH" | "CRITICAL_CONFIDENTIAL",
+      "location": "paragraph N" | "section: <heading>" | "after paragraph N" | "line containing: <short quote>",
+      "original": "<exact text from draft, or null if this is an insertion>",
+      "suggested": "<replacement or insertion content, or null if CRITICAL_CONFIDENTIAL>",
+      "rationale": "<one sentence — why this change>"
+    }
+  ],
+  "voice_check": {
+    "matches_voice": true | false,
+    "notes": "<if false, what is drifting>"
+  }
+}
+`;
 
 const SYSTEM_PROMPT = `You are a personal assistant grounded in Sajiv Francis's published writing, architecture notes, talks, and cloud  materials. You speak about him in the third person.                             
                                      
@@ -649,6 +879,44 @@ function docsContentRoot(env: Env): string {
   return env.DOCS_CONTENT_ROOT?.trim() || DOCS_CONTENT_ROOT_DEFAULT;
 }
 
+const BLOG_REPO_DEFAULT = 'sfrancis2017/sajivfrancis.github.io-master';
+const BLOG_BRANCH_DEFAULT = 'master';
+const BLOG_CONTENT_ROOT_DEFAULT = 'src/content/blog';
+
+function blogRepo(env: Env): string {
+  return env.BLOG_REPO?.trim() || BLOG_REPO_DEFAULT;
+}
+function blogBranch(env: Env): string {
+  return env.BLOG_BRANCH?.trim() || BLOG_BRANCH_DEFAULT;
+}
+function blogContentRoot(env: Env): string {
+  return env.BLOG_CONTENT_ROOT?.trim() || BLOG_CONTENT_ROOT_DEFAULT;
+}
+
+// Render a draft's frontmatter object as a YAML block suitable for the
+// top of an .mdx file. Mirrors the schema in
+// sajivfrancis.github.io-master/src/content/config.ts so the post passes
+// Astro's content collection validation. Only emits keys with non-empty
+// values; tags is always emitted (possibly as an empty list).
+function renderBlogFrontmatter(fm: DraftFrontmatter): string {
+  const lines: string[] = ['---'];
+  const escape = (s: string) => '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+  lines.push(`title: ${escape(fm.title)}`);
+  if (fm.subtitle) lines.push(`subtitle: ${escape(fm.subtitle)}`);
+  lines.push(`description: ${escape(fm.description)}`);
+  lines.push(`pubDate: ${fm.pubDate}`);
+  if (fm.tags.length) {
+    lines.push('tags:');
+    for (const t of fm.tags) lines.push(`  - ${escape(t)}`);
+  } else {
+    lines.push('tags: []');
+  }
+  lines.push(`draft: ${fm.draft ? 'true' : 'false'}`);
+  lines.push(`publishMode: ${fm.publishMode}`);
+  lines.push('---');
+  return lines.join('\n');
+}
+
 // 1. Strip references — inline citations + Sources Consulted + Verification
 // checklist sections. Leave diagram contents alone (citations inside Mermaid
 // node labels are rare and removing them risks breaking diagram syntax).
@@ -852,6 +1120,204 @@ async function listDocsSections(env: Env): Promise<string[]> {
   return [...sections].sort();
 }
 
+// ---- Repo grounding fetcher ----------------------------------------------
+//
+// Fetches a curated set of high-signal files from a GitHub repo and returns
+// them as a single grounding context block. Used by /api/drafts/:id/review
+// to ground technical claims in the draft against actual repo contents.
+//
+// File selection: always try README/CLAUDE.md/configs; opportunistically
+// try common entry points. Missing files (404) are skipped silently. Each
+// file is capped at ~30k chars; total aggregate is capped at ~80k chars
+// per repo (~20k tokens). Cached in REPO_CACHE_KV keyed by repo+SHA so
+// successive reviews on the same commit don't re-fetch.
+
+const GROUNDING_CANDIDATE_FILES = [
+  // Project documentation (highest signal)
+  'README.md',
+  'CLAUDE.md',
+  'LICENSE',
+  // Package + infrastructure manifests (declare the actual stack)
+  'package.json',
+  'wrangler.toml',
+  'docker-compose.yml',
+  'Dockerfile',
+  'astro.config.mjs',
+  'astro.config.ts',
+  'next.config.js',
+  'vite.config.ts',
+  'tsconfig.json',
+  '.env.example',
+  '.env.full.example',
+  // Common Astro / content schema locations
+  'src/content/config.ts',
+  'src/layouts/BaseLayout.astro',
+  // Worker / API entry points
+  'worker/wrangler.toml',
+  'worker/src/index.ts',
+  'worker/index.js',
+  'api/index.js',
+  'api/Dockerfile',
+  'src/index.ts',
+  'src/index.js',
+  'src/main.ts',
+];
+
+const GROUNDING_PER_FILE_CAP = 30_000;
+const GROUNDING_PER_REPO_CAP = 80_000;
+
+type RepoGrounding = {
+  repo: string;
+  branch: string;
+  sha: string;
+  files: Array<{ path: string; content: string; truncated: boolean }>;
+  total_chars: number;
+};
+
+// Format a grounding object into the <grounding> XML block consumed by
+// the review prompt. Each file is fenced with its path on a marker line.
+function formatGroundingForPrompt(groundings: RepoGrounding[]): string {
+  if (!groundings.length) return '';
+  const parts: string[] = ['<grounding>'];
+  for (const g of groundings) {
+    parts.push(`<repo name="${g.repo}" branch="${g.branch}" sha="${g.sha.slice(0, 7)}">`);
+    for (const f of g.files) {
+      parts.push(`<file path="${f.path}"${f.truncated ? ' truncated="true"' : ''}>`);
+      parts.push(f.content);
+      parts.push('</file>');
+    }
+    parts.push('</repo>');
+  }
+  parts.push('</grounding>');
+  return parts.join('\n');
+}
+
+async function fetchRepoGrounding(repo: string, env: Env): Promise<RepoGrounding | null> {
+  if (!env.DOCS_GITHUB_TOKEN) {
+    console.warn(`fetchRepoGrounding: no DOCS_GITHUB_TOKEN, skipping ${repo}`);
+    return null;
+  }
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
+    console.warn(`fetchRepoGrounding: invalid repo slug "${repo}"`);
+    return null;
+  }
+  const ghHeaders: HeadersInit = {
+    Authorization: `Bearer ${env.DOCS_GITHUB_TOKEN}`,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'sajivfrancis-chat-worker',
+  };
+
+  // Step 1: get default branch + latest commit SHA
+  let branch = 'main';
+  let sha = '';
+  try {
+    const repoMeta = await fetch(`https://api.github.com/repos/${repo}`, { headers: ghHeaders });
+    if (!repoMeta.ok) {
+      console.warn(`fetchRepoGrounding: repo metadata fetch failed for ${repo}: HTTP ${repoMeta.status}`);
+      return null;
+    }
+    const meta: any = await repoMeta.json();
+    branch = meta.default_branch ?? 'main';
+    const branchInfo = await fetch(
+      `https://api.github.com/repos/${repo}/branches/${branch}`,
+      { headers: ghHeaders }
+    );
+    if (!branchInfo.ok) {
+      console.warn(`fetchRepoGrounding: branch fetch failed for ${repo}@${branch}: HTTP ${branchInfo.status}`);
+      return null;
+    }
+    const bi: any = await branchInfo.json();
+    sha = bi?.commit?.sha ?? '';
+    if (!sha) return null;
+  } catch (e: any) {
+    console.warn(`fetchRepoGrounding: metadata error for ${repo}: ${e?.message ?? e}`);
+    return null;
+  }
+
+  // Step 2: check cache
+  const cacheKey = `grounding:${repo}:${sha}`;
+  if (env.REPO_CACHE_KV) {
+    try {
+      const cached = (await env.REPO_CACHE_KV.get(cacheKey, 'json')) as RepoGrounding | null;
+      if (cached) return cached;
+    } catch {
+      // Cache miss or read error — fall through to live fetch
+    }
+  }
+
+  // Step 3: fetch candidate files in parallel (best-effort, skip 404s)
+  const fetches = GROUNDING_CANDIDATE_FILES.map(async (path) => {
+    try {
+      const res = await fetch(
+        `https://api.github.com/repos/${repo}/contents/${path}?ref=${sha}`,
+        { headers: ghHeaders }
+      );
+      if (!res.ok) return null;
+      const data: any = await res.json();
+      if (!data?.content || typeof data.content !== 'string') return null;
+      // GitHub returns base64 with newlines
+      const raw = atob(data.content.replace(/\n/g, ''));
+      let content = raw;
+      let truncated = false;
+      if (content.length > GROUNDING_PER_FILE_CAP) {
+        // Keep the head (most signal — imports, exports, types, top of logic)
+        // plus a small tail marker.
+        content =
+          content.slice(0, GROUNDING_PER_FILE_CAP - 2_000) +
+          '\n\n... [truncated for grounding budget] ...\n\n' +
+          content.slice(-1_500);
+        truncated = true;
+      }
+      return { path, content, truncated };
+    } catch {
+      return null;
+    }
+  });
+  const results = (await Promise.all(fetches)).filter(
+    (f): f is { path: string; content: string; truncated: boolean } => f !== null
+  );
+
+  // Step 4: enforce per-repo char cap (in candidate order — high-signal first)
+  const kept: Array<{ path: string; content: string; truncated: boolean }> = [];
+  let totalChars = 0;
+  for (const f of results) {
+    const fitChars = Math.min(f.content.length, GROUNDING_PER_REPO_CAP - totalChars);
+    if (fitChars <= 0) break;
+    if (fitChars < f.content.length) {
+      kept.push({
+        path: f.path,
+        content: f.content.slice(0, fitChars) + '\n\n... [truncated for repo budget] ...',
+        truncated: true,
+      });
+      totalChars = GROUNDING_PER_REPO_CAP;
+      break;
+    }
+    kept.push(f);
+    totalChars += f.content.length;
+  }
+
+  const grounding: RepoGrounding = {
+    repo,
+    branch,
+    sha,
+    files: kept,
+    total_chars: totalChars,
+  };
+
+  // Step 5: cache for 1 hour
+  if (env.REPO_CACHE_KV) {
+    try {
+      await env.REPO_CACHE_KV.put(cacheKey, JSON.stringify(grounding), {
+        expirationTtl: 3600,
+      });
+    } catch (e: any) {
+      console.warn(`fetchRepoGrounding: cache write failed for ${repo}: ${e?.message ?? e}`);
+    }
+  }
+  return grounding;
+}
+
 // 3. Commit a file to the docs repo. Uses GitHub's Contents API — supports
 // both create (no sha) and update (with sha of existing file). Returns the
 // resulting commit + html URL so the caller can show the user where it landed.
@@ -859,12 +1325,15 @@ async function publishToGithub(
   filePath: string,
   content: string,
   commitMessage: string,
-  env: Env
+  env: Env,
+  opts: { repo?: string; branch?: string } = {}
 ): Promise<{ html_url: string; commit_sha: string; path: string }> {
   if (!env.DOCS_GITHUB_TOKEN) {
     throw new Error('DOCS_GITHUB_TOKEN not configured on worker');
   }
-  const apiUrl = `https://api.github.com/repos/${docsRepo(env)}/contents/${filePath}`;
+  const targetRepo = opts.repo ?? docsRepo(env);
+  const targetBranch = opts.branch ?? docsBranch(env);
+  const apiUrl = `https://api.github.com/repos/${targetRepo}/contents/${filePath}`;
   const ghHeaders: HeadersInit = {
     Authorization: `Bearer ${env.DOCS_GITHUB_TOKEN}`,
     Accept: 'application/vnd.github+json',
@@ -876,7 +1345,7 @@ async function publishToGithub(
   // GET first to find existing SHA (required for update; absent for create)
   let existingSha: string | undefined;
   try {
-    const getRes = await fetch(`${apiUrl}?ref=${docsBranch(env)}`, { headers: ghHeaders });
+    const getRes = await fetch(`${apiUrl}?ref=${targetBranch}`, { headers: ghHeaders });
     if (getRes.ok) {
       const existing: any = await getRes.json();
       existingSha = existing.sha;
@@ -893,7 +1362,7 @@ async function publishToGithub(
   const body: Record<string, any> = {
     message: commitMessage,
     content: contentB64,
-    branch: docsBranch(env),
+    branch: targetBranch,
   };
   if (existingSha) body.sha = existingSha;
 
@@ -1776,6 +2245,680 @@ export default {
       }
       try {
         await env.ARTIFACTS_KV.delete(`artifact:${id}`);
+        return new Response(JSON.stringify({ deleted: id }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      } catch (e: any) {
+        return new Response(JSON.stringify({ error: `KV delete failed: ${e?.message ?? e}` }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+    }
+
+    // ---- Drafts store (owner-only) ---------------------------------------
+    //
+    // Persistence layer for blog post drafts authored in the /admin/write
+    // editor on sajivfrancis.com. Each draft is a JSON record with
+    // frontmatter (title, tags, pubDate, etc.) + markdown body. Optional
+    // grounding_repos array pins GitHub repos to use as grounding context
+    // when the draft is sent through /api/drafts/:id/review.
+    //
+    // POST   /api/drafts          create — returns { id, created_at, ... }
+    // GET    /api/drafts          list metadata (newest first)
+    // GET    /api/drafts/:id      fetch full record (frontmatter + body)
+    // PUT    /api/drafts/:id      update (full replace of frontmatter + body)
+    // DELETE /api/drafts/:id      delete
+    //
+    // KV metadata holds {id, created_at, updated_at, title, slug} so list()
+    // returns useful summaries without N+1 reads.
+
+    if (url.pathname === '/api/drafts' && req.method === 'POST') {
+      if (!isAuthorized(req, env)) {
+        return new Response(JSON.stringify({ error: 'unauthorized' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      if (!env.DRAFTS_KV) {
+        return new Response(
+          JSON.stringify({ error: 'DRAFTS_KV not configured' }),
+          { status: 503, headers: { 'Content-Type': 'application/json', ...cors } }
+        );
+      }
+      let body: any;
+      try {
+        body = await req.json();
+      } catch {
+        return new Response(JSON.stringify({ error: 'invalid json' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      const validation = validateDraftPayload(body);
+      if (!validation.ok) {
+        return new Response(JSON.stringify({ error: validation.error }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      const now = new Date();
+      const created_at = now.toISOString();
+      const ymd = created_at.slice(0, 10).replace(/-/g, '');
+      const hms = created_at.slice(11, 19).replace(/:/g, '');
+      const rand = Math.random().toString(36).slice(2, 8);
+      const id = `dft_${ymd}_${hms}_${rand}`;
+
+      const record = {
+        id,
+        created_at,
+        updated_at: created_at,
+        frontmatter: validation.frontmatter,
+        body: validation.body,
+        grounding_repos: validation.grounding_repos,
+      };
+      const slug = validation.frontmatter.slug ?? slugify(validation.frontmatter.title);
+      try {
+        await env.DRAFTS_KV.put(`draft:${id}`, JSON.stringify(record), {
+          metadata: {
+            id,
+            created_at,
+            updated_at: created_at,
+            title: validation.frontmatter.title,
+            slug,
+          },
+        });
+      } catch (e: any) {
+        return new Response(JSON.stringify({ error: `KV write failed: ${e?.message ?? e}` }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      return new Response(
+        JSON.stringify({ id, created_at, updated_at: created_at, title: validation.frontmatter.title, slug }),
+        { status: 201, headers: { 'Content-Type': 'application/json', ...cors } }
+      );
+    }
+
+    if (url.pathname === '/api/drafts' && req.method === 'GET') {
+      if (!isAuthorized(req, env)) {
+        return new Response(JSON.stringify({ error: 'unauthorized' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      if (!env.DRAFTS_KV) {
+        return new Response(
+          JSON.stringify({ error: 'DRAFTS_KV not configured' }),
+          { status: 503, headers: { 'Content-Type': 'application/json', ...cors } }
+        );
+      }
+      const limit = Math.min(Math.max(Number(url.searchParams.get('limit') ?? '100'), 1), 1000);
+      const items: any[] = [];
+      let cursor: string | undefined;
+      try {
+        do {
+          const result = await env.DRAFTS_KV.list({ prefix: 'draft:', limit: 1000, cursor });
+          for (const k of result.keys) {
+            const meta = (k.metadata ?? {}) as any;
+            items.push({
+              id: meta.id ?? k.name.replace(/^draft:/, ''),
+              created_at: meta.created_at,
+              updated_at: meta.updated_at,
+              title: meta.title,
+              slug: meta.slug,
+            });
+          }
+          cursor = result.list_complete ? undefined : result.cursor;
+        } while (cursor && items.length < 10000);
+      } catch (e: any) {
+        return new Response(JSON.stringify({ error: `KV list failed: ${e?.message ?? e}` }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      items.sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''));
+      return new Response(
+        JSON.stringify({ drafts: items.slice(0, limit), count: Math.min(items.length, limit) }),
+        { status: 200, headers: { 'Content-Type': 'application/json', ...cors } }
+      );
+    }
+
+    if (url.pathname.startsWith('/api/drafts/') && req.method === 'GET') {
+      if (!isAuthorized(req, env)) {
+        return new Response(JSON.stringify({ error: 'unauthorized' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      if (!env.DRAFTS_KV) {
+        return new Response(
+          JSON.stringify({ error: 'DRAFTS_KV not configured' }),
+          { status: 503, headers: { 'Content-Type': 'application/json', ...cors } }
+        );
+      }
+      const id = url.pathname.slice('/api/drafts/'.length).replace(/\/$/, '');
+      if (!/^dft_[a-zA-Z0-9_]+$/.test(id)) {
+        return new Response(JSON.stringify({ error: 'invalid draft id' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      try {
+        const value = await env.DRAFTS_KV.get(`draft:${id}`, 'json');
+        if (!value) {
+          return new Response(JSON.stringify({ error: 'not found' }), {
+            status: 404,
+            headers: { 'Content-Type': 'application/json', ...cors },
+          });
+        }
+        return new Response(JSON.stringify(value), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      } catch (e: any) {
+        return new Response(JSON.stringify({ error: `KV read failed: ${e?.message ?? e}` }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+    }
+
+    if (url.pathname.startsWith('/api/drafts/') && req.method === 'PUT') {
+      if (!isAuthorized(req, env)) {
+        return new Response(JSON.stringify({ error: 'unauthorized' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      if (!env.DRAFTS_KV) {
+        return new Response(
+          JSON.stringify({ error: 'DRAFTS_KV not configured' }),
+          { status: 503, headers: { 'Content-Type': 'application/json', ...cors } }
+        );
+      }
+      const id = url.pathname.slice('/api/drafts/'.length).replace(/\/$/, '');
+      if (!/^dft_[a-zA-Z0-9_]+$/.test(id)) {
+        return new Response(JSON.stringify({ error: 'invalid draft id' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      let body: any;
+      try {
+        body = await req.json();
+      } catch {
+        return new Response(JSON.stringify({ error: 'invalid json' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      const validation = validateDraftPayload(body);
+      if (!validation.ok) {
+        return new Response(JSON.stringify({ error: validation.error }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      const existing = (await env.DRAFTS_KV.get(`draft:${id}`, 'json')) as any;
+      if (!existing) {
+        return new Response(JSON.stringify({ error: 'not found' }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      const updated_at = new Date().toISOString();
+      const record = {
+        id,
+        created_at: existing.created_at,
+        updated_at,
+        frontmatter: validation.frontmatter,
+        body: validation.body,
+        grounding_repos: validation.grounding_repos,
+      };
+      const slug = validation.frontmatter.slug ?? slugify(validation.frontmatter.title);
+      try {
+        await env.DRAFTS_KV.put(`draft:${id}`, JSON.stringify(record), {
+          metadata: {
+            id,
+            created_at: existing.created_at,
+            updated_at,
+            title: validation.frontmatter.title,
+            slug,
+          },
+        });
+      } catch (e: any) {
+        return new Response(JSON.stringify({ error: `KV write failed: ${e?.message ?? e}` }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      return new Response(
+        JSON.stringify({ id, created_at: existing.created_at, updated_at, title: validation.frontmatter.title, slug }),
+        { status: 200, headers: { 'Content-Type': 'application/json', ...cors } }
+      );
+    }
+
+    // POST /api/drafts/:id/review — combined-grounding editorial pass.
+    // Fetches the draft, fetches GitHub repo grounding (from grounding_repos)
+    // and pgvector corpus grounding (from RETRIEVE_URL), then asks Sonnet
+    // to return structured suggestions JSON. Preserves voice. See the
+    // DRAFT_REVIEW_SYSTEM_PROMPT below for the full rubric.
+    {
+      const reviewMatch = url.pathname.match(/^\/api\/drafts\/(dft_[a-zA-Z0-9_]+)\/review$/);
+      if (reviewMatch && req.method === 'POST') {
+        if (!isAuthorized(req, env)) {
+          return new Response(JSON.stringify({ error: 'unauthorized' }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json', ...cors },
+          });
+        }
+        if (!env.DRAFTS_KV) {
+          return new Response(
+            JSON.stringify({ error: 'DRAFTS_KV not configured' }),
+            { status: 503, headers: { 'Content-Type': 'application/json', ...cors } }
+          );
+        }
+        const id = reviewMatch[1];
+        const draft = (await env.DRAFTS_KV.get(`draft:${id}`, 'json')) as any;
+        if (!draft) {
+          return new Response(JSON.stringify({ error: 'draft not found' }), {
+            status: 404,
+            headers: { 'Content-Type': 'application/json', ...cors },
+          });
+        }
+
+        const start = Date.now();
+        try {
+          // Fetch GitHub grounding from all tagged repos in parallel
+          const groundingRepos: string[] = Array.isArray(draft.grounding_repos)
+            ? draft.grounding_repos
+            : [];
+          const ghGroundings = (
+            await Promise.all(groundingRepos.map((r) => fetchRepoGrounding(r, env)))
+          ).filter((g): g is RepoGrounding => g !== null);
+
+          // pgvector corpus grounding — use draft title + body lead as the
+          // retrieval query. Owner mode so all visibility scopes are in play.
+          let corpusChunks: Array<{ source: string; text: string }> = [];
+          const retrievalQuery = `${draft.frontmatter.title}\n\n${draft.body.slice(0, 800)}`;
+          try {
+            const clientId = await clientHash(req, env, 'owner');
+            const ctx = await getContext(
+              retrievalQuery,
+              ['docs', 'writing', 'meta'],
+              undefined, // owner mode → no visibility filter
+              'owner',
+              clientId,
+              env,
+              { topK: 6 }
+            );
+            corpusChunks = ctx.chunks ?? [];
+          } catch (e: any) {
+            console.warn(`review: pgvector retrieval failed: ${e?.message ?? e}`);
+            // Non-fatal — continue with GitHub grounding only
+          }
+
+          // Build the user content block
+          const userBlocks: string[] = [];
+          if (ghGroundings.length) {
+            userBlocks.push(formatGroundingForPrompt(ghGroundings));
+          }
+          if (corpusChunks.length) {
+            userBlocks.push('<corpus_grounding>');
+            for (const c of corpusChunks) {
+              userBlocks.push(`<chunk source="${c.source.replace(/"/g, '&quot;')}">`);
+              userBlocks.push(c.text);
+              userBlocks.push('</chunk>');
+            }
+            userBlocks.push('</corpus_grounding>');
+          }
+          userBlocks.push('<draft>');
+          userBlocks.push(`# ${draft.frontmatter.title}`);
+          if (draft.frontmatter.subtitle) {
+            userBlocks.push(`*${draft.frontmatter.subtitle}*`);
+          }
+          userBlocks.push('');
+          userBlocks.push(draft.body);
+          userBlocks.push('</draft>');
+          userBlocks.push('');
+          userBlocks.push('Review this draft per your system instructions. Return JSON only.');
+
+          const messageBody = JSON.stringify({
+            model: env.ANTHROPIC_MODEL,
+            max_tokens: 8192,
+            system: DRAFT_REVIEW_SYSTEM_PROMPT,
+            messages: [{ role: 'user', content: userBlocks.join('\n') }],
+          });
+          const r = await callAnthropicWithRetry(messageBody, env);
+          if (!r.ok) {
+            const errText = (await r.text()).slice(0, 500);
+            return new Response(
+              JSON.stringify({
+                error: `Anthropic call failed: HTTP ${r.status} ${errText}`,
+                elapsed_ms: Date.now() - start,
+              }),
+              { status: 502, headers: { 'Content-Type': 'application/json', ...cors } }
+            );
+          }
+          const apiResp: any = await r.json();
+          const rawText: string =
+            (apiResp?.content ?? [])
+              .filter((b: any) => b?.type === 'text')
+              .map((b: any) => b.text)
+              .join('') ?? '';
+
+          // Parse JSON. Be lenient with stray fences (some prompts leak ```json).
+          let review: any;
+          try {
+            const cleaned = rawText
+              .trim()
+              .replace(/^```(?:json)?\s*/i, '')
+              .replace(/\s*```$/i, '');
+            review = JSON.parse(cleaned);
+          } catch (e: any) {
+            return new Response(
+              JSON.stringify({
+                error: `failed to parse review JSON: ${e?.message ?? e}`,
+                raw: rawText.slice(0, 2000),
+                elapsed_ms: Date.now() - start,
+              }),
+              { status: 502, headers: { 'Content-Type': 'application/json', ...cors } }
+            );
+          }
+
+          return new Response(
+            JSON.stringify({
+              draft_id: id,
+              review,
+              grounding_meta: {
+                github_repos: ghGroundings.map((g) => ({
+                  repo: g.repo,
+                  branch: g.branch,
+                  sha: g.sha.slice(0, 7),
+                  file_count: g.files.length,
+                  total_chars: g.total_chars,
+                })),
+                corpus_chunks: corpusChunks.length,
+              },
+              elapsed_ms: Date.now() - start,
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json', ...cors } }
+          );
+        } catch (e: any) {
+          return new Response(
+            JSON.stringify({
+              error: String(e?.message ?? e),
+              elapsed_ms: Date.now() - start,
+            }),
+            { status: 500, headers: { 'Content-Type': 'application/json', ...cors } }
+          );
+        }
+      }
+    }
+
+    // POST /api/drafts/:id/upload-image — commits an image to the blog repo
+    // under public/img/blog/<slug>/<filename> so it can be referenced from
+    // the draft markdown. Returns the public URL the editor can paste.
+    // Body: multipart/form-data with `file` (image blob) and optional `name`.
+    // Max file size: 5 MB. Allowed types: image/png, image/jpeg, image/webp,
+    // image/gif, image/svg+xml.
+    {
+      const imageMatch = url.pathname.match(/^\/api\/drafts\/(dft_[a-zA-Z0-9_]+)\/upload-image$/);
+      if (imageMatch && req.method === 'POST') {
+        if (!isAuthorized(req, env)) {
+          return new Response(JSON.stringify({ error: 'unauthorized' }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json', ...cors },
+          });
+        }
+        if (!env.DRAFTS_KV) {
+          return new Response(
+            JSON.stringify({ error: 'DRAFTS_KV not configured' }),
+            { status: 503, headers: { 'Content-Type': 'application/json', ...cors } }
+          );
+        }
+        if (!env.DOCS_GITHUB_TOKEN) {
+          return new Response(
+            JSON.stringify({ error: 'DOCS_GITHUB_TOKEN not configured on worker' }),
+            { status: 503, headers: { 'Content-Type': 'application/json', ...cors } }
+          );
+        }
+        const id = imageMatch[1];
+        const draft = (await env.DRAFTS_KV.get(`draft:${id}`, 'json')) as any;
+        if (!draft) {
+          return new Response(JSON.stringify({ error: 'draft not found' }), {
+            status: 404,
+            headers: { 'Content-Type': 'application/json', ...cors },
+          });
+        }
+        let form: FormData;
+        try {
+          form = await req.formData();
+        } catch {
+          return new Response(JSON.stringify({ error: 'expected multipart/form-data' }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json', ...cors },
+          });
+        }
+        const fileEntry = form.get('file');
+        if (!fileEntry || typeof fileEntry === 'string') {
+          return new Response(JSON.stringify({ error: 'file (image blob) required' }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json', ...cors },
+          });
+        }
+        // Workers types expose form blobs as Blob, not File. Cast to a
+        // shape that has the File-like `name` field for downstream use.
+        const file = fileEntry as Blob & { name?: string };
+        const ALLOWED_TYPES = new Set([
+          'image/png',
+          'image/jpeg',
+          'image/webp',
+          'image/gif',
+          'image/svg+xml',
+        ]);
+        if (!ALLOWED_TYPES.has(file.type)) {
+          return new Response(
+            JSON.stringify({ error: `unsupported image type: ${file.type}` }),
+            { status: 415, headers: { 'Content-Type': 'application/json', ...cors } }
+          );
+        }
+        const MAX_SIZE = 5 * 1024 * 1024;
+        if (file.size > MAX_SIZE) {
+          return new Response(
+            JSON.stringify({ error: `image too large (${file.size} bytes, max ${MAX_SIZE})` }),
+            { status: 413, headers: { 'Content-Type': 'application/json', ...cors } }
+          );
+        }
+        // Sanitise filename: keep extension, slugify the stem, dedupe with timestamp.
+        const rawName = (form.get('name')?.toString() ?? file.name ?? 'image').trim();
+        const dotIdx = rawName.lastIndexOf('.');
+        const stem = dotIdx > 0 ? rawName.slice(0, dotIdx) : rawName;
+        const ext = dotIdx > 0 ? rawName.slice(dotIdx + 1).toLowerCase() : '';
+        const safeExt = /^(png|jpg|jpeg|webp|gif|svg)$/i.test(ext) ? ext : 'png';
+        const slug = draft.frontmatter.slug ?? slugify(draft.frontmatter.title);
+        const stamp = Date.now().toString(36);
+        const fileName = `${slugify(stem)}-${stamp}.${safeExt}`;
+        const filePath = `public/img/blog/${slug}/${fileName}`;
+
+        // Encode the binary as base64 for the GitHub Contents API.
+        const buf = new Uint8Array(await file.arrayBuffer());
+        let binary = '';
+        for (let i = 0; i < buf.length; i++) binary += String.fromCharCode(buf[i]);
+        const contentB64 = btoa(binary);
+
+        // Direct Contents API call — publishToGithub re-encodes as UTF-8
+        // text, which would corrupt binary uploads. Call the API inline.
+        const apiUrl = `https://api.github.com/repos/${blogRepo(env)}/contents/${filePath}`;
+        const ghHeaders: HeadersInit = {
+          Authorization: `Bearer ${env.DOCS_GITHUB_TOKEN}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'User-Agent': 'chat-worker-publish/1.0',
+        };
+        try {
+          const putRes = await fetch(apiUrl, {
+            method: 'PUT',
+            headers: { ...ghHeaders, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              message: `Add image for ${slug}: ${fileName}`,
+              content: contentB64,
+              branch: blogBranch(env),
+            }),
+          });
+          if (!putRes.ok) {
+            const errText = (await putRes.text()).slice(0, 400);
+            return new Response(
+              JSON.stringify({ error: `GitHub image commit failed: HTTP ${putRes.status} ${errText}` }),
+              { status: 502, headers: { 'Content-Type': 'application/json', ...cors } }
+            );
+          }
+          // Image is committed; return the public URL the editor can drop
+          // into the markdown body. Image lives at /img/blog/<slug>/<file>
+          // after the next Astro build pushes to GitHub Pages.
+          const publicUrl = `/img/blog/${slug}/${fileName}`;
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              path: filePath,
+              public_url: publicUrl,
+              markdown_snippet: `![${stem}](${publicUrl})`,
+              size: file.size,
+              type: file.type,
+            }),
+            { status: 201, headers: { 'Content-Type': 'application/json', ...cors } }
+          );
+        } catch (e: any) {
+          return new Response(
+            JSON.stringify({ error: String(e?.message ?? e) }),
+            { status: 502, headers: { 'Content-Type': 'application/json', ...cors } }
+          );
+        }
+      }
+    }
+
+    // POST /api/drafts/:id/publish — commits the draft as an .mdx file
+    // to sajivfrancis.github.io-master under src/content/blog/. Uses the
+    // shared publishToGithub helper with the blog repo/branch overrides.
+    // Marks the draft as published in KV metadata but does NOT auto-delete,
+    // so you can re-publish (overwrite) if needed.
+    {
+      const publishMatch = url.pathname.match(/^\/api\/drafts\/(dft_[a-zA-Z0-9_]+)\/publish$/);
+      if (publishMatch && req.method === 'POST') {
+        if (!isAuthorized(req, env)) {
+          return new Response(JSON.stringify({ error: 'unauthorized' }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json', ...cors },
+          });
+        }
+        if (!env.DRAFTS_KV) {
+          return new Response(
+            JSON.stringify({ error: 'DRAFTS_KV not configured' }),
+            { status: 503, headers: { 'Content-Type': 'application/json', ...cors } }
+          );
+        }
+        if (!env.DOCS_GITHUB_TOKEN) {
+          return new Response(
+            JSON.stringify({ error: 'DOCS_GITHUB_TOKEN not configured on worker' }),
+            { status: 503, headers: { 'Content-Type': 'application/json', ...cors } }
+          );
+        }
+        const id = publishMatch[1];
+        const draft = (await env.DRAFTS_KV.get(`draft:${id}`, 'json')) as any;
+        if (!draft) {
+          return new Response(JSON.stringify({ error: 'draft not found' }), {
+            status: 404,
+            headers: { 'Content-Type': 'application/json', ...cors },
+          });
+        }
+        const fm: DraftFrontmatter = draft.frontmatter;
+        const slug = fm.slug ?? slugify(fm.title);
+        const fileName = `${fm.pubDate}-${slug}.mdx`;
+        const filePath = `${blogContentRoot(env)}/${fileName}`;
+        const frontmatterBlock = renderBlogFrontmatter({ ...fm, slug });
+        const fileContent = `${frontmatterBlock}\n\n${draft.body.trim()}\n`;
+        const commitMessage = fm.draft
+          ? `Draft post: ${fm.title}`
+          : `Add post: ${fm.title}`;
+        const start = Date.now();
+        try {
+          const result = await publishToGithub(filePath, fileContent, commitMessage, env, {
+            repo: blogRepo(env),
+            branch: blogBranch(env),
+          });
+          // Update draft metadata with published markers so the list view
+          // can show "Published" status. Keep the draft body intact for
+          // easy republish/edit.
+          const published_at = new Date().toISOString();
+          const updated = {
+            ...draft,
+            published_at,
+            published_path: result.path,
+            published_commit_sha: result.commit_sha,
+          };
+          try {
+            await env.DRAFTS_KV.put(`draft:${id}`, JSON.stringify(updated), {
+              metadata: {
+                id,
+                created_at: draft.created_at,
+                updated_at: draft.updated_at,
+                title: fm.title,
+                slug,
+                published_at,
+              },
+            });
+          } catch {
+            // Non-fatal: the post is already committed; metadata sync can be retried.
+          }
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              draft_id: id,
+              path: result.path,
+              github_url: result.html_url,
+              commit_sha: result.commit_sha,
+              blog_url: `https://sajivfrancis.com/blog/${slug}/`,
+              published_at,
+              elapsed_ms: Date.now() - start,
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json', ...cors } }
+          );
+        } catch (e: any) {
+          return new Response(
+            JSON.stringify({
+              error: String(e?.message ?? e),
+              elapsed_ms: Date.now() - start,
+            }),
+            { status: 502, headers: { 'Content-Type': 'application/json', ...cors } }
+          );
+        }
+      }
+    }
+
+    if (url.pathname.startsWith('/api/drafts/') && req.method === 'DELETE') {
+      if (!isAuthorized(req, env)) {
+        return new Response(JSON.stringify({ error: 'unauthorized' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      if (!env.DRAFTS_KV) {
+        return new Response(
+          JSON.stringify({ error: 'DRAFTS_KV not configured' }),
+          { status: 503, headers: { 'Content-Type': 'application/json', ...cors } }
+        );
+      }
+      const id = url.pathname.slice('/api/drafts/'.length).replace(/\/$/, '');
+      if (!/^dft_[a-zA-Z0-9_]+$/.test(id)) {
+        return new Response(JSON.stringify({ error: 'invalid draft id' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json', ...cors },
+        });
+      }
+      try {
+        await env.DRAFTS_KV.delete(`draft:${id}`);
         return new Response(JSON.stringify({ deleted: id }), {
           status: 200,
           headers: { 'Content-Type': 'application/json', ...cors },
