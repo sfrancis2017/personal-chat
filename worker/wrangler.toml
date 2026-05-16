@@ -39,7 +39,7 @@ id = "3acee39af5ef4824b289311f52ad3531"
 # Then replace the placeholder id below with the value wrangler prints.
 [[kv_namespaces]]
 binding = "DRAFTS_KV"
-id = "REPLACE_WITH_DRAFTS_KV_ID"
+id = "33f973096ad8488bbfd9950ffe63cdaf"
 
 # Repo grounding cache — caches GitHub-fetched repo contents used as
 # grounding context for /api/drafts/:id/review. Keyed by `{repo}:{sha}`
@@ -49,7 +49,7 @@ id = "REPLACE_WITH_DRAFTS_KV_ID"
 # Then replace the placeholder id below with the value wrangler prints.
 [[kv_namespaces]]
 binding = "REPO_CACHE_KV"
-id = "REPLACE_WITH_REPO_CACHE_KV_ID"
+id = "9bb9ebc53bc64fba81072c7d6ec780d1"
 
 # Secrets — set via:
 #   cd worker && npx wrangler secret put ANTHROPIC_API_KEY
