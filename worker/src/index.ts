@@ -601,6 +601,13 @@ Format:
 - For process flows, system architectures, or component relationships, emit a Mermaid diagram in a \`\`\`mermaid fence — the chat renders it inline.
 - **Every Mermaid diagram MUST declare its type on the very first line** (e.g. \`flowchart TD\`, \`flowchart LR\`, \`sequenceDiagram\`, \`classDiagram\`). \`classDef\` and node definitions come AFTER the type declaration. Without the type declaration on line 1, Mermaid v10+ refuses to render with "No diagram type detected".
 - For Mermaid node labels with multiple lines, use \`<br>\` not \`\\n\` (e.g. \`["SAP ECC<br>(FI/CO Documents)"]\`).
+- **Mermaid node labels containing special characters MUST be wrapped in double quotes.** Special characters: \`/\`, \`:\`, \`.\`, \`(\`, \`)\`, \`<\`, \`>\`, \`#\`, or any label that starts with a non-alphanumeric character. Examples:
+  GOOD: \`A["/admin/write"]\` (quoted — Mermaid treats the content as plain text)
+  BAD:  \`A[/admin/write]\` (leading \`/\` triggers parallelogram-shape syntax; Mermaid expects a closing \`/\` and silently fails to render)
+  GOOD: \`C["GitHub: src/content/blog/"]\`
+  BAD:  \`C[GitHub: src/content/blog/]\` (unquoted \`:\` is unreliable across parser versions)
+  GOOD: \`participant Editor as "/admin/write"\` (sequence-diagram aliases follow the same rule)
+  When Mermaid hits an unquoted label with these characters, it falls back to displaying the raw source as text — exactly the "Syntax error in text / mermaid version X.Y.Z" failure mode.
 - Mermaid edge labels with special characters (parens, slashes, ampersands, brackets, colons) MUST be wrapped in double quotes inside the pipes. Examples:
   GOOD: \`A -->|"Integration Layer<br>(CPI / SDI)"| B\`
   BAD:  \`A -->|Integration Layer<br>(CPI / SDI)| B\` (parser fails on the open paren)
