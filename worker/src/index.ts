@@ -121,6 +121,11 @@ type DraftFrontmatter = {
   draft: boolean;
   publishMode: 'blog-first' | 'venue-first';
   slug?: string;
+  // Cover / OG image. Used by BlogPost.astro as the Open Graph
+  // social card AND optionally as a hero image on the post page.
+  // Relative path (e.g. "/img/blog/my-slug/cover.png") or absolute URL.
+  coverImage?: string;
+  coverAlt?: string;
 };
 
 type DraftValidationResult =
@@ -180,6 +185,27 @@ function validateDraftPayload(input: any): DraftValidationResult {
       error: 'frontmatter.slug must be a URL-safe slug (lowercase, hyphens, max 80 chars)',
     };
   }
+  // coverImage: optional. Accept relative paths starting with / OR absolute
+  // URLs. Reject anything that doesn't match either shape so we never emit
+  // invalid frontmatter that would fail Astro's content collection schema.
+  if (
+    fm.coverImage !== undefined &&
+    (typeof fm.coverImage !== 'string' ||
+      fm.coverImage.length > 500 ||
+      !(fm.coverImage.startsWith('/') || /^https?:\/\//.test(fm.coverImage)))
+  ) {
+    return {
+      ok: false,
+      error:
+        'frontmatter.coverImage must be a root-relative path (starting with "/") or a full https:// URL',
+    };
+  }
+  if (fm.coverAlt !== undefined && (typeof fm.coverAlt !== 'string' || fm.coverAlt.length > 300)) {
+    return {
+      ok: false,
+      error: 'frontmatter.coverAlt must be a string up to 300 characters',
+    };
+  }
   return {
     ok: true,
     frontmatter: {
@@ -191,6 +217,10 @@ function validateDraftPayload(input: any): DraftValidationResult {
       draft: fm.draft === true,
       publishMode,
       slug: fm.slug,
+      coverImage:
+        typeof fm.coverImage === 'string' && fm.coverImage.trim() ? fm.coverImage.trim() : undefined,
+      coverAlt:
+        typeof fm.coverAlt === 'string' && fm.coverAlt.trim() ? fm.coverAlt.trim() : undefined,
     },
     body: input.body,
     grounding_repos,
@@ -947,6 +977,8 @@ function renderBlogFrontmatter(fm: DraftFrontmatter): string {
   if (fm.subtitle) lines.push(`subtitle: ${escape(fm.subtitle)}`);
   lines.push(`description: ${escape(fm.description)}`);
   lines.push(`pubDate: ${fm.pubDate}`);
+  if (fm.coverImage) lines.push(`coverImage: ${escape(fm.coverImage)}`);
+  if (fm.coverAlt) lines.push(`coverAlt: ${escape(fm.coverAlt)}`);
   if (fm.tags.length) {
     lines.push('tags:');
     for (const t of fm.tags) lines.push(`  - ${escape(t)}`);
