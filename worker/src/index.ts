@@ -476,7 +476,38 @@ Mermaid rules:
   - Match what's in prose + grounding. Don't invent components.
 
 ## 5. POLISH
-Typos, punctuation, inconsistent capitalisation, clichés. Low-stakes.
+Typos, punctuation, inconsistent capitalisation, clichés.
+
+ALSO INCLUDE: MDX-safety issues. Drafts publish to .mdx files that
+Astro compiles — certain content patterns will FAIL the build and
+prevent the post from going live. Treat these as build-blocking and
+prefix the rationale with "[BUILD-BLOCKING]" so the author sees the
+severity:
+
+  - Unfenced code blocks. Any block of code-like content (variable
+    declarations, function calls, JSX, JSON, SQL, multi-line shell
+    snippets) MUST be wrapped in triple-backtick fences. MDX treats
+    unfenced \`{ ... }\` as a JSX expression and fails with
+    "Unexpected content after expression". Suggest wrapping with
+    \`\`\`lang and \`\`\` (pick lang from context: ts, js, sql, json,
+    bash, py — use plain \`\`\` if unclear).
+
+  - Unclosed HTML tags. MDX is XML-strict. Self-closing form is
+    required for void elements: \`<img src="..." alt="..." />\` not
+    \`<img src="..." alt="...">\`. Same for \`<br />\`, \`<hr />\`,
+    \`<input />\`.
+
+  - Bare \`<\` followed by a lowercase letter not part of a standard
+    HTML element. MDX parses these as JSX component references. If
+    the author meant a literal less-than sign, suggest \`&lt;\` or
+    wrapping in backticks.
+
+  - Stray \`{\` or \`}\` in prose. MDX treats curly braces as JSX
+    expression boundaries. Suggest \`\\{\` and \`\\}\` to escape, or
+    wrap the surrounding text in backticks/code fence.
+
+These rules apply to the BODY of the draft only — fenced code blocks
+and frontmatter are exempt (MDX skips parsing inside them).
 
 ## 6. CRITICAL_CONFIDENTIAL
 Flag-only category (no fix suggested). Use when the draft contains:
@@ -879,7 +910,7 @@ function docsContentRoot(env: Env): string {
   return env.DOCS_CONTENT_ROOT?.trim() || DOCS_CONTENT_ROOT_DEFAULT;
 }
 
-const BLOG_REPO_DEFAULT = 'sfrancis2017/sajivfrancis.github.io-master';
+const BLOG_REPO_DEFAULT = 'sfrancis2017/sajivfrancis.github.io';
 const BLOG_BRANCH_DEFAULT = 'master';
 const BLOG_CONTENT_ROOT_DEFAULT = 'src/content/blog';
 
